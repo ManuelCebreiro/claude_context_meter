@@ -39,7 +39,7 @@ function callFromLine(line) {
 }
 
 function newBlock(start, firstTs) {
-  return { start, end: start + H5, tokens: 0, cost: 0, calls: 0, first: firstTs, last: firstTs, models: {} };
+  return { start, end: start + H5, tokens: 0, freshTokens: 0, cost: 0, calls: 0, first: firstTs, last: firstTs, models: {} };
 }
 
 // `anchor` (opcional): inicio de un bloque ya conocido por el escaneo completo.
@@ -61,6 +61,7 @@ function buildBlocks(calls, pricing, anchor) {
     if (!curPushed) { if (cur.first == null) cur.first = c.ts; blocks.push(cur); curPushed = true; }
     const t = P.usageTotal(c.usage);
     cur.tokens += t;
+    cur.freshTokens += P.freshOf(c.usage);
     cur.cost += P.callCost(c.model, c.usage, pricing);
     cur.calls++;
     cur.last = c.ts;
@@ -99,12 +100,19 @@ class LiveBlocks {
     const blocks = buildBlocks(this.calls.values(), this.pricing, this.anchor);
     const b = blocks[blocks.length - 1];
     if (!b || now >= b.end) return null;
-    // Ritmo: tokens de los últimos 30 min
-    let recent = 0;
-    for (const c of this.calls.values()) if (c.ts >= now - 30 * 60000 && c.ts >= b.start) recent += P.usageTotal(c.usage);
-    const perMin = recent / 30;
+    // Ritmo: tokens de los últimos 30 min (total y sin caché leída)
+    let recent = 0, recentFresh = 0;
+    for (const c of this.calls.values()) if (c.ts >= now - 30 * 60000 && c.ts >= b.start) {
+      recent += P.usageTotal(c.usage);
+      recentFresh += P.freshOf(c.usage);
+    }
+    const perMin = recent / 30, perMinFresh = recentFresh / 30;
     const minsLeft = Math.max(0, (b.end - now) / 60000);
-    return { ...b, perMin, minsLeft, projected: b.tokens + perMin * minsLeft };
+    return {
+      ...b, minsLeft,
+      perMin, projected: b.tokens + perMin * minsLeft,
+      perMinFresh, projectedFresh: b.freshTokens + perMinFresh * minsLeft,
+    };
   }
 }
 

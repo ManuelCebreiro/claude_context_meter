@@ -73,6 +73,8 @@ function emptyUsage() { return { input: 0, output: 0, cw5m: 0, cw1h: 0, cacheRea
 function addUsage(a, b) { a.input += b.input; a.output += b.output; a.cw5m += b.cw5m; a.cw1h += b.cw1h; a.cacheRead += b.cacheRead; return a; }
 function usageTotal(u) { return u.input + u.output + u.cw5m + u.cw1h + u.cacheRead; }
 function contextOf(u) { return u.input + u.cw5m + u.cw1h + u.cacheRead; }
+// Tokens sin la caché leída: entrada nueva + salida + escritura en caché
+function freshOf(u) { return u.input + u.output + u.cw5m + u.cw1h; }
 
 function readUsage(raw) {
   const cc = raw.cache_creation || {};
@@ -359,5 +361,5 @@ module.exports = {
   readClaudeEnv,
   PROJECTS_DIR, SessionState, IncrementalReader, parseSessionFile, listSessionFiles,
   findActiveSession, subagentFiles, feedSubagentFile, contextWindowFor, callCost, usageTotal,
-  contextOf, encodeProjectDir, normPath, readUsage,
+  contextOf, freshOf, encodeProjectDir, normPath, readUsage,
 };

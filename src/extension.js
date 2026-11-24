@@ -85,9 +85,14 @@ function tick() {
 }
 
 // ── Bloque de 5 horas ───────────────────────────────────────────────────────
+// Tu bloque más grande, medido en tokens sin caché leída. Los bloques guardados por
+// versiones anteriores no tienen ese dato y no cuentan hasta que se recalculan.
 function personalMax() {
   let max = null;
-  for (const b of pastBlocks) if (b.end <= Date.now() && (!max || b.tokens > max.tokens)) max = b;
+  for (const b of pastBlocks) {
+    if (b.end > Date.now() || typeof b.freshTokens !== 'number') continue;
+    if (!max || b.freshTokens > max.freshTokens) max = b;
+  }
   return max;
 }
 
@@ -98,7 +103,7 @@ function tickBlocks(now) {
   if (!liveBlocks) liveBlocks = new B.LiveBlocks(pricing());
   const changed = liveBlocks.poll(now);
   const b = liveBlocks.current(now);
-  const key = b ? `${b.start}|${b.tokens}|${Math.floor(b.minsLeft)}` : 'none';
+  const key = b ? `${b.start}|${b.tokens}|${b.freshTokens}|${Math.floor(b.minsLeft)}` : 'none';
   if (!changed && key === lastBlockKey) return;
   lastBlockKey = key;
   renderBlock(b);
@@ -116,8 +121,8 @@ function renderBlock(b) {
     return;
   }
   const max = personalMax();
-  const ratio = max && max.tokens ? b.tokens / max.tokens : 0;
-  blkItem.text = `$(clock) 5h: ${fmt(b.tokens)}${max ? ` · ${Math.round(ratio * 100)}% de tu máx.` : ''} · ${dur(b.minsLeft)}`;
+  const ratio = max && max.freshTokens ? b.freshTokens / max.freshTokens : 0;
+  blkItem.text = `$(clock) 5h: ${fmt(b.freshTokens)} sin caché (${fmt(b.tokens)} total)${max ? ` · ${Math.round(ratio * 100)}% de tu máx.` : ''} · ${dur(b.minsLeft)}`;
   blkItem.backgroundColor = ratio >= 1 ? new vscode.ThemeColor('statusBarItem.errorBackground')
     : ratio >= c.get('blockWarnRatio') ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
   const md = new vscode.MarkdownString(undefined, true);
@@ -125,12 +130,13 @@ function renderBlock(b) {
   md.appendMarkdown(`**Bloque de 5 h actual** (estimado): ${hm(b.start)} → ${hm(b.end)}  \n`);
   md.appendMarkdown(`Se reinicia en **${dur(b.minsLeft)}**\n\n`);
   md.appendMarkdown(`| | |\n|---|---:|\n`);
-  md.appendMarkdown(`| Tokens procesados | ${fmt(b.tokens)} |\n| Llamadas a la API | ${b.calls} |\n`);
+  md.appendMarkdown(`| Tokens sin caché leída | ${fmt(b.freshTokens)} |\n| Tokens procesados (total) | ${fmt(b.tokens)} |\n`);
+  md.appendMarkdown(`| Leídos de caché | ${fmt(b.tokens - b.freshTokens)} |\n| Llamadas a la API | ${b.calls} |\n`);
   if (c.get('showCost')) md.appendMarkdown(`| Coste equiv. API | ${money(b.cost)} |\n`);
-  md.appendMarkdown(`| Ritmo (últimos 30 min) | ${fmt(b.perMin)}/min |\n| Si sigues así, al acabar | ${fmt(b.projected)} |\n`);
-  if (max) md.appendMarkdown(`| Tu bloque más grande | ${fmt(max.tokens)} (${new Date(max.start).toLocaleDateString('es-ES')}) |\n`);
-  md.appendMarkdown(`\n`);
-  if (max && b.projected > max.tokens && ratio < 1) md.appendMarkdown(`$(warning) A este ritmo superarás tu bloque más grande antes de que se reinicie.\n\n`);
+  md.appendMarkdown(`| Ritmo sin caché (últimos 30 min) | ${fmt(b.perMinFresh)}/min |\n| Si sigues así, al acabar | ${fmt(b.projectedFresh)} sin caché |\n`);
+  if (max) md.appendMarkdown(`| Tu bloque más grande | ${fmt(max.freshTokens)} sin caché (${new Date(max.start).toLocaleDateString('es-ES')}) |\n`);
+  md.appendMarkdown(`\n_El % de tu máximo se calcula sin la caché leída: esas relecturas se repiten en cada llamada y harían parecer el total mucho mayor de lo que de verdad gastas._\n\n`);
+  if (max && b.projectedFresh > max.freshTokens && ratio < 1) md.appendMarkdown(`$(warning) A este ritmo superarás tu bloque más grande antes de que se reinicie.\n\n`);
   if (!max) md.appendMarkdown(blockScanDone ? '_Aún no hay bloques anteriores para comparar._\n\n' : '_Calculando tus bloques anteriores…_\n\n');
   md.appendMarkdown(`_Suma todo Claude Code de este ordenador (todos los proyectos y subagentes). No incluye el chat de claude.ai ni otros equipos, y no es el % oficial de tu plan._\n\n`);
   md.appendMarkdown(`[$(graph) Abrir panel](command:claudeMeter.openPanel)`);
@@ -154,8 +160,9 @@ async function scanBlocksBackground() {
     const byStart = new Map(saved.map(b => [b.start, b]));
     for (const b of all) if (b.end <= now) {
       const prev = byStart.get(b.start);
-      // >= : con los mismos tokens se queda el recién calculado (precios actuales)
-      if (!prev || b.tokens >= prev.tokens) byStart.set(b.start, b);
+      // >= : con los mismos tokens se queda el recién calculado (precios actuales);
+      // también sustituye a los guardados por versiones sin freshTokens
+      if (!prev || b.tokens >= prev.tokens || typeof prev.freshTokens !== 'number') byStart.set(b.start, b);
     }
     pastBlocks = [...byStart.values()].sort((a, b) => a.start - b.start);
     // Ancla para el bloque en vivo: el inicio del bloque más reciente conocido

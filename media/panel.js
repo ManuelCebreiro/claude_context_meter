@@ -175,14 +175,17 @@
     const w = h('div');
     w.append(h('h3', {}, 'Bloques de 5 horas (todo Claude Code de este ordenador)'));
     if (!blocks) { w.append(h('p', { class: 'muted' }, 'Calculando…')); return w; }
-    const max = blocks.max ? blocks.max.tokens : 0;
+    // El máximo y la barra usan tokens sin caché leída (igual que la barra de estado)
+    const max = blocks.max && typeof blocks.max.freshTokens === 'number' ? blocks.max.freshTokens : 0;
+    const fresh = (b) => typeof b.freshTokens === 'number' ? b.freshTokens : null;
     const t = (ms) => new Date(ms).toLocaleString('es-ES', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     const rowsData = (blocks.past || []).slice(-15).reverse();
     const rows = [];
     const mk = (b, isCur) => h('tr', { class: isCur ? 'cur' : '' }, [
       h('td', {}, [isCur ? h('span', { class: 'tag' }, 'ahora') : null, t(b.start)]),
-      h('td', { class: 'num' }, fmt(b.tokens)),
-      h('td', { class: 'barcell' }, h('div', { class: 'meter' }, h('div', { class: 'fill' + (max && b.tokens >= max ? ' bad' : max && b.tokens >= max * blockWarn ? ' warn' : ''), style: 'width:' + (max ? Math.min(100, b.tokens / max * 100) : 0).toFixed(1) + '%' }))),
+      h('td', { class: 'num' }, fresh(b) == null ? '—' : fmt(fresh(b))),
+      h('td', { class: 'num muted' }, fmt(b.tokens)),
+      h('td', { class: 'barcell' }, h('div', { class: 'meter' }, h('div', { class: 'fill' + (max && fresh(b) >= max ? ' bad' : max && fresh(b) >= max * blockWarn ? ' warn' : ''), style: 'width:' + (max && fresh(b) != null ? Math.min(100, fresh(b) / max * 100) : 0).toFixed(1) + '%' }))),
       h('td', { class: 'num' }, String(b.calls)),
       showCost ? h('td', { class: 'num' }, money(b.cost)) : null,
     ]);
@@ -190,7 +193,10 @@
     for (const b of rowsData) rows.push(mk(b, false));
     if (!rows.length) { w.append(h('p', { class: 'muted' }, 'Sin bloques todavía.')); return w; }
     w.append(h('table', {}, [
-      h('thead', {}, h('tr', {}, [h('th', {}, 'Inicio'), h('th', {}, 'Tokens'), h('th', {}, 'Respecto a tu máximo'), h('th', {}, 'Llamadas'), showCost ? h('th', {}, 'Coste') : null])),
+      h('thead', {}, h('tr', {}, [h('th', {}, 'Inicio'),
+        h('th', { title: 'Entrada nueva + salida + escritura en caché (sin la caché leída)' }, 'Sin caché'),
+        h('th', { title: 'Incluye las relecturas de caché' }, 'Total'),
+        h('th', { title: 'Tokens sin caché respecto a tu bloque más grande' }, 'Respecto a tu máximo'), h('th', {}, 'Llamadas'), showCost ? h('th', {}, 'Coste') : null])),
       h('tbody', {}, rows),
     ]));
     return w;
