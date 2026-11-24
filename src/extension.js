@@ -287,7 +287,7 @@ function slimLive(s) {
     currentContext: s.currentContext, contextWindow: s.contextWindow, contextWindowReason: s.contextWindowReason,
     peakContext: s.peakContext, lastCallUsage: s.lastCallUsage,
     prompts: s.prompts, apiCalls: s.apiCalls, totalTokens: s.totalTokens, freshTokens: P.freshOf(s.totals),
-    subTokens: P.usageTotal(s.subTotals), cost: s.cost,
+    subTokens: P.usageTotal(s.subTotals), cost: s.cost, totals: s.totals,
     lastPrompt: lp ? {
       text: lp.text.replace(/\s+/g, ' ').slice(0, 300), ts: lp.ts, startCtx: lp.startCtx, endCtx: lp.endCtx,
       calls: lp.calls, subCalls: lp.subCalls, tokens: P.usageTotal(lp.usage), cost: lp.cost,

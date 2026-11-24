@@ -12,7 +12,8 @@
     for (const [k, v] of Object.entries(attrs || {})) {
       if (k === 'class') el.className = v;
       else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
-      else if (k === 'style') el.setAttribute('style', v);
+      // La CSP de VS Code bloquea setAttribute('style'); el CSSOM (el.style) sí está permitido
+      else if (k === 'style') for (const d of String(v).split(';')) { const i = d.indexOf(':'); if (i > 0) el.style.setProperty(d.slice(0, i).trim(), d.slice(i + 1).trim()); }
       else el.setAttribute(k, v);
     }
     for (const c of [].concat(kids || [])) if (c != null) el.append(c instanceof Node ? c : String(c));
