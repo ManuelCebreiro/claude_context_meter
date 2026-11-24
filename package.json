@@ -6,7 +6,7 @@
   "version": "0.4.0",
   "publisher": "manuelCebreiro",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/ManuelCebreiro/claude_context_meter.git" },
+  "repository": { "type": "git", "url": "https://github.com/ManuelCebreiro/claude_context_meter" },
   "homepage": "https://github.com/ManuelCebreiro/claude_context_meter#readme",
   "bugs": { "url": "https://github.com/ManuelCebreiro/claude_context_meter/issues" },
   "engines": { "vscode": "^1.90.0" },
