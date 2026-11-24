@@ -1,75 +1,101 @@
 # Claude Context Meter
 
-Extensión de VS Code que te muestra cuánto estás consumiendo con Claude Code: el contexto de la conversación, lo que lleva cada chat, tu límite de 5 horas y el semanal, y un histórico de todas tus sesiones. Funciona en local: no usa la red ni modifica nada de Claude Code.
+> **Unofficial extension. Not affiliated with, endorsed by or sponsored by Anthropic.** "Claude" and "Claude Code" are trademarks of Anthropic, used here only to describe what the extension works with.
 
-## Qué verás
+See how much you are using Claude Code without leaving VS Code: the context of the current conversation, what each chat costs, your 5-hour and weekly limits, and a history of all your sessions. Everything runs locally: no network, and nothing in Claude Code is changed.
 
-### Vista "Claude Meter" (debajo del chat de Claude Code)
+*The extension's interface is currently in Spanish. [Versión en español más abajo](#español).*
 
-Aparece en la barra lateral, justo debajo del chat de Claude Code. Al pasar el ratón por cualquier dato, un bocadillo explica qué es.
+![Claude Meter view below the Claude Code chat](images/view.png)
 
-- **Contexto**: cuántos tokens arrastra la conversación sobre la ventana del modelo (1M o 200K), con un esquema de cuadraditos (cada uno es el 1 % de la ventana) según de dónde viene: caché, nuevo en caché o sin caché.
-- **Última llamada**: caché leída, caché escrita, entrada nueva y salida.
-- **Sesión**: preguntas, llamadas, tokens procesados y sin caché, subagentes y coste equivalente de la API, con una barra que muestra qué parte es caché leída.
-- **Última pregunta**: cuánto contexto añadió y cuánto costó.
-- **Límite de 5 h y semanal (oficiales)**: el % usado y la hora de reinicio que Claude Code guarda al consultar tu uso (por ejemplo con `/usage`), con el reparto semanal por producto (Claude Code, Cowork…). Siempre indica de cuándo es el dato.
-- **Ventana actual**: lo que lleva **este proyecto** en la ventana de 5 h y el total de **todos tus proyectos** de este ordenador, con un reparto por proyecto y un punto verde en los que están trabajando ahora.
+## Features
 
-Si no la ves, ejecuta **Claude Meter: Mostrar la vista** desde la paleta de comandos (`Ctrl+Shift+P`).
+### Claude Meter view (below the Claude Code chat)
 
-### Barra de estado
+Sits in the sidebar right below the Claude Code chat. Hover over any value and a tooltip explains what it means.
 
-Tres indicadores cortos: contexto (`67k/1M · 7%`), sesión (`1 · 133k · $0.36`) y límite de 5 h (`5h 26% · 4h 49m`). Con el ajuste `claudeMeter.statusBar` puedes dejar los tres, solo el contexto o ninguno.
+- **Context**: how many tokens the conversation carries out of the model's window (1M or 200K), with a grid of squares (1 % of the window each) showing where it comes from: cache, newly cached or uncached.
+- **Last call**: cache read, cache write, new input and output.
+- **Session**: prompts, API calls, tokens processed with and without cache reads, subagents and API-equivalent cost, plus a bar showing how much of it is cache reads.
+- **Last prompt**: how much context it added and what it cost.
+- **Official 5-hour and weekly limits**: the % used and the reset time that Claude Code stores when it checks your usage (for example with `/usage`), with the weekly split by product. It always shows how old that data is.
+- **Current window**: what **this project** has used in the current 5-hour window, and the total for **all your projects** on this computer, broken down by project, with a green dot on the ones working right now.
 
-### Panel completo
+### Status bar
 
-Desde la vista o la barra de estado se abre un panel con:
+Three short indicators: context, session and 5-hour limit. With `claudeMeter.statusBar` you can show all three, only the context, or none.
 
-- **Sesión actual**: gráfica del contexto que arrastra cada pregunta y tabla pregunta a pregunta.
-- **Histórico**: hoy, 7 días, 30 días y total; tokens por día; bloques de 5 h anteriores; y todas tus sesiones (clic para ver el detalle), con filtro por proyecto.
+![Status bar indicators](images/status-bar.png)
 
-## Instalación
+### Full panel
 
-1. Descarga el archivo `.vsix` de la última [release](https://github.com/ManuelCebreiro/claude_context_meter/releases).
-2. Instálalo de una de estas formas:
-   - En VS Code: vista de Extensiones → menú `···` → **Instalar desde VSIX…** y elige el archivo.
-   - Desde una terminal: `code --install-extension claude-context-meter-0.4.0.vsix`
-3. Abre una carpeta donde uses Claude Code y escríbele algo a Claude.
+Opened from the view or the status bar.
 
-Requiere VS Code 1.90 o posterior. La vista se coloca debajo del chat de la extensión oficial de Claude Code; si no la tienes instalada, aparece en el Explorador.
+- **Current session** (*Sesión actual*): context carried by each prompt and a prompt-by-prompt table. Compactions are highlighted.
+- **History** (*Histórico*): today, 7 days, 30 days and all time; tokens per day; previous 5-hour blocks; and every session (click for details), filterable by project.
 
-## Ajustes
+![Full panel: current session](images/panel-session.png)
 
-| Ajuste | Por defecto | Qué hace |
+![Full panel: history](images/panel-history.png)
+
+## Installation
+
+1. Download the `.vsix` file from the latest [release](https://github.com/ManuelCebreiro/claude_context_meter/releases).
+2. Install it:
+   - In VS Code: Extensions view → `···` menu → **Install from VSIX…** and pick the file.
+   - From a terminal: `code --install-extension claude-context-meter-<version>.vsix`
+3. Open a folder where you use Claude Code and send Claude a message.
+
+Requires VS Code 1.90 or later. The view is placed below the official Claude Code extension's chat; if that extension is not installed, it appears in the Explorer. If you can't find it, run **Claude Meter: Mostrar la vista** from the Command Palette (`Ctrl+Shift+P`).
+
+## Settings
+
+| Setting | Default | What it does |
 |---|---|---|
-| `claudeMeter.statusBar` | `all` | Qué mostrar en la barra de estado: `all`, `context` o `none`. |
-| `claudeMeter.showCost` | `true` | Mostrar el coste equivalente de la API. |
-| `claudeMeter.warningPercent` / `errorPercent` | `60` / `80` | % de contexto a partir del cual se pone amarillo / rojo. |
-| `claudeMeter.showBlock` | `true` | Mostrar el límite de 5 h y la ventana actual. |
-| `claudeMeter.blockWarnRatio` | `0.8` | Fracción a partir de la cual el límite se pone amarillo. |
-| `claudeMeter.contextWindow` | `0` | Ventana de contexto fija en tokens (0 = automática según el modelo). |
-| `claudeMeter.saveToDisk` | `true` | Guardar el histórico para conservarlo cuando Claude Code borre transcripts antiguos. Desactivado, no escribe nada en disco. |
-| `claudeMeter.priceOverrides` | `{}` | Precios propios por modelo (USD por millón). |
-| `claudeMeter.pollMs` | `1500` | Cada cuántos milisegundos se relee el chat activo. |
+| `claudeMeter.statusBar` | `all` | What to show in the status bar: `all`, `context` or `none`. |
+| `claudeMeter.showCost` | `true` | Show the API-equivalent cost. |
+| `claudeMeter.warningPercent` / `errorPercent` | `60` / `80` | Context % at which it turns yellow / red. |
+| `claudeMeter.showBlock` | `true` | Show the 5-hour limit and the current window. |
+| `claudeMeter.blockWarnRatio` | `0.8` | Fraction at which the limit turns yellow. |
+| `claudeMeter.contextWindow` | `0` | Fixed context window in tokens (0 = automatic, based on the model). |
+| `claudeMeter.saveToDisk` | `true` | Keep a history so it survives when Claude Code deletes old transcripts. When off, the extension writes nothing to disk. |
+| `claudeMeter.priceOverrides` | `{}` | Your own prices per model (USD per million tokens). |
+| `claudeMeter.pollMs` | `1500` | How often (ms) the active chat is re-read. |
 
-## Cómo funciona y privacidad
+## How it works and privacy
 
-- Lee los transcripts que Claude Code ya guarda en `~/.claude/projects/` y, solo para el límite oficial, el uso que Claude Code guarda en `~/.claude.json`. De ese archivo solo extrae el % y las horas de reinicio, nada de tu cuenta.
-- No se conecta a ningún sitio, no instala hooks y no escribe en `~/.claude`.
-- Guarda su propio histórico (`history.json` y `blocks.json`) en el almacenamiento de la extensión, salvo que desactives `claudeMeter.saveToDisk`.
-- Lee los archivos por trozos y sin bloquear VS Code.
+- It reads the transcripts Claude Code already saves in `~/.claude/projects/` and, for the official limits only, the usage Claude Code stores in `~/.claude.json`. From that file it only extracts the percentages and reset times, nothing about your account.
+- It makes no network requests, installs no hooks and never writes to `~/.claude`.
+- It keeps its own history (`history.json` and `blocks.json`) in the extension's storage, unless you turn off `claudeMeter.saveToDisk`.
+- Files are read asynchronously and in chunks, so VS Code is never blocked.
 
-## Notas
+## Notes
 
-- **Tokens procesados** incluye las relecturas de caché: en cada llamada, Claude Code reenvía todo el contexto, así que en chats largos son la mayor parte del volumen. Por eso también se muestran los tokens **sin caché leída**.
-- El **límite oficial** solo se actualiza cuando Claude Code consulta tu uso; si el dato es antiguo, la vista lo indica.
-- Los tokens de la **ventana actual** son solo de Claude Code en este ordenador: no incluyen claude.ai, Cowork ni otros equipos (el % oficial sí).
-- El **coste** es una estimación con los precios públicos de la API; con un plan Pro o Max no es lo que pagas.
+- **Tokens processed** includes cache reads: on every call, Claude Code resends the whole context, so in long chats they are most of the volume. That's why tokens **without cache reads** are shown too.
+- The **official limit** only updates when Claude Code checks your usage; if the data is old, the view says so.
+- Tokens in the **current window** only cover Claude Code on this computer, not claude.ai, Cowork or other devices (the official % does include them).
+- The **cost** is an estimate based on public API prices; on a Pro or Max plan it is not what you pay.
 
-## Desarrollo
+## Development
 
-- `npm test` ejecuta los tests (Node, sin dependencias).
-- F5 abre una ventana de VS Code con la extensión cargada.
-- `npx @vscode/vsce package --no-dependencies` genera el `.vsix`.
+- `npm test` runs the tests (Node, no dependencies).
+- F5 opens a VS Code window with the extension loaded.
+- `npx @vscode/vsce package --no-dependencies` builds the `.vsix`.
+
+---
+
+## Español
+
+> **Extensión no oficial. No está afiliada, respaldada ni patrocinada por Anthropic.** "Claude" y "Claude Code" son marcas de Anthropic; aquí solo se usan para indicar con qué funciona la extensión.
+
+Muestra tu consumo de Claude Code dentro de VS Code: el contexto de la conversación, lo que lleva cada chat, tus límites de 5 horas y semanal, y un histórico de tus sesiones. Funciona en local: no usa la red ni modifica nada de Claude Code.
+
+- **Vista "Claude Meter"**, debajo del chat de Claude Code: contexto (con cuadraditos), última llamada, sesión, última pregunta, límites oficiales de 5 h y semanal, y la ventana actual de este proyecto y de todos tus proyectos. Al pasar el ratón por cada dato se explica qué es.
+- **Barra de estado** con tres indicadores cortos (ajuste `claudeMeter.statusBar`).
+- **Panel completo** con la sesión pregunta a pregunta y el histórico.
+
+**Instalación:** descarga el `.vsix` de la última [release](https://github.com/ManuelCebreiro/claude_context_meter/releases) y, en VS Code, Extensiones → `···` → **Instalar desde VSIX…**
+
+**Privacidad:** solo lee los transcripts de `~/.claude/projects/` y, para los límites oficiales, el % y las horas de reinicio que Claude Code guarda en `~/.claude.json`. No se conecta a nada ni escribe en `~/.claude`.
 
 Licencia MIT.

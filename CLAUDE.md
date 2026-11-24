@@ -26,6 +26,8 @@ Extensión de VS Code (JavaScript puro, sin dependencias ni compilación) que mu
 - La ventana de 5 h en vivo se alinea con el reinicio oficial (`LiveBlocks.officialReset`); si ya pasó, la siguiente empieza con la primera llamada posterior. Los bloques no se redondean a la hora (solo al minuto). Los tokens locales solo cubren Claude Code de este ordenador (no claude.ai, Cowork ni otros equipos). Cada llamada lleva `proj` (su carpeta de `~/.claude/projects`, también para subagentes); `LiveBlocks.current()` devuelve `projects` (reparto de la ventana) y `currentProject` (las carpetas de `projectDirs`, que pone la extensión con la carpeta abierta y la del chat activo).
 
 ## Probar y empaquetar
+- Icono: fuente en `images/icon.svg` (diseño propio, sin logos de Anthropic) → `media/icon.png` 256×256. Capturas del README en `images/*.png`, hechas con datos ficticios; `images/` no va en el `.vsix` (vsce reescribe los enlaces a GitHub, así que deben estar subidas).
+- Es una extensión no oficial: mantener el aviso "Unofficial, not affiliated with Anthropic" en la descripción y el README.
 - Tests: `npm test` (node:test, sin dependencias; usan carpetas temporales, nunca `~/.claude`).
 - F5 → abre una ventana "Extension Development Host" con la extensión cargada.
 - Empaquetar: `npx @vscode/vsce package --no-dependencies` → genera el `.vsix`.
