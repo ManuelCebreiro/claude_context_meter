@@ -10,6 +10,8 @@
     for (const [k, v] of Object.entries(attrs || {})) {
       if (v == null) continue;
       if (k === 'class') el.className = v;
+      // VS Code no muestra los tooltips nativos (title) en las vistas: usamos un bocadillo propio
+      else if (k === 'title') el.dataset.tip = v;
       else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
       // La CSP de VS Code bloquea setAttribute('style'); el CSSOM (el.style) sí está permitido
       else if (k === 'style') for (const d of String(v).split(';')) { const i = d.indexOf(':'); if (i > 0) el.style.setProperty(d.slice(0, i).trim(), d.slice(i + 1).trim()); }
@@ -157,25 +159,86 @@
     ]);
   }
 
+  const ago = (ms) => {
+    const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
+    return m < 1 ? 'hace un momento' : m < 60 ? `hace ${m} min` : `hace ${dur(m)}`;
+  };
+  const dayTime = (ms) => new Date(ms).toLocaleString('es-ES', { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const UPDATE_TIP = 'Claude Code guarda este dato cuando consulta tu uso a Anthropic (por ejemplo al escribir /usage). La extensión solo lo lee: no se conecta a nada.';
+
+  // Límite oficial de 5 h y semanal (de ~/.claude.json)
+  function officialSection(st) {
+    const off = st.official, b = st.block, cfg = st.cfg;
+    if (!off || (!off.five && !off.expiredAt && !off.week)) return null;
+    const sec = h('section', {});
+    if (off.five) {
+      const pct = off.five.pct;
+      const cls = pct >= 95 ? 'bad' : pct >= cfg.blockWarnRatio * 100 ? 'warn' : '';
+      const mins = (off.five.resetsAt - Date.now()) / 60000;
+      sec.append(
+        h('h4', { title: 'Tu límite de uso de 5 horas, según Anthropic. Cuenta todo: Claude Code, claude.ai, Cowork y otros equipos.' },
+          ['Límite de 5 h', h('span', { class: 'right', title: `La ventana termina a las ${hm(off.five.resetsAt)}; entonces el % vuelve a 0.` }, 'se reinicia ' + hm(off.five.resetsAt))]),
+        h('div', { title: `Has usado el ${pct} % de tu límite de 5 horas. Quedan ${dur(mins)} para que se reinicie (a las ${hm(off.five.resetsAt)}).` }, [
+          h('span', { class: 'pct ' + cls }, 'en ' + dur(mins)),
+          h('span', { class: 'big' }, [pct + '%', h('span', { class: 'of' }, ' usado · oficial')]),
+        ]),
+        waffle([{ value: pct, cls: 'b-used' + (cls ? ' ' + cls : '') }], 100,
+          `Cada cuadrado es el 1 % de tu límite de 5 horas. Llevas ${pct} de 100.`),
+      );
+    } else if (off.expiredAt) {
+      const next = b && b.alignedToOfficial ? b.end : null;
+      sec.append(
+        h('h4', { title: 'Tu límite de uso de 5 horas, según Anthropic.' },
+          ['Límite de 5 h', next ? h('span', { class: 'right', title: 'Calculado encadenando ventanas de 5 h desde el último reinicio oficial.' }, 'se reinicia ~' + hm(next)) : null]),
+        h('div', { class: 'muted', title: UPDATE_TIP },
+          `Se reinició a las ${hm(off.expiredAt)}.` + (next ? ` La ventana actual termina hacia las ${hm(next)}.` : ' La siguiente empieza con tu próximo mensaje.')
+          + ' El nuevo % aparecerá cuando Claude Code lo vuelva a consultar (por ejemplo con /usage).'),
+      );
+    }
+    if (off.week) {
+      const wcls = off.week.pct >= 95 ? 'bad' : off.week.pct >= cfg.blockWarnRatio * 100 ? 'warn' : '';
+      const parts = (off.breakdown || []).map(r => `${r.name}: ${r.percent} %`).join(', ');
+      sec.append(
+        h('div', { class: 'weekrow', title: `Llevas el ${off.week.pct} % de tu límite semanal. Se reinicia el ${dayTime(off.week.resetsAt)}.`
+          + (parts ? ` Reparto de lo usado esta semana: ${parts}.` : '') }, [
+          h('span', { class: 'muted' }, 'Semanal'),
+          h('span', { class: 'bar' }, h('i', { class: 'fill ' + wcls, style: 'width:' + Math.min(100, off.week.pct) + '%' })),
+          h('span', { class: 'v' }, off.week.pct + '%'),
+        ]),
+        h('div', { class: 'muted small' }, 'se reinicia ' + dayTime(off.week.resetsAt)
+          + (off.breakdown && off.breakdown.length ? ' · ' + off.breakdown.map(r => `${r.name} ${r.percent}%`).join(' · ') : '')),
+      );
+    }
+    if (off.fetchedAt) sec.append(h('div', { class: 'note muted', title: UPDATE_TIP }, `Dato oficial de ${ago(off.fetchedAt)}`));
+    return sec;
+  }
+
+  // Claude Code en este ordenador durante la ventana actual (los tokens que se ven en local)
   function blockSection(st) {
     const b = st.block, max = st.max, cfg = st.cfg;
     if (!cfg.showBlock) return null;
-    const sec = h('section', {}, [h('h4', { title: 'Claude limita el uso por bloques de 5 horas. Aquí se estima el bloque actual con todo Claude Code de este ordenador.' },
-      ['Bloque de 5 h', b ? h('span', { class: 'right', title: 'Inicio y fin del bloque actual.' }, hm(b.start) + ' → ' + hm(b.end)) : null])]);
+    const hasOfficialPct = !!(st.official && st.official.five);
+    const title = hasOfficialPct || (b && b.alignedToOfficial) ? 'Este ordenador · ventana actual' : 'Bloque de 5 h (estimado)';
+    const sec = h('section', {}, [h('h4', {
+      title: hasOfficialPct || (b && b.alignedToOfficial)
+        ? 'Lo que ha gastado Claude Code en este ordenador dentro de la ventana de 5 h actual. No incluye claude.ai, Cowork ni otros equipos.'
+        : 'Sin dato oficial, el bloque se estima con Claude Code de este ordenador: empieza con tu primer mensaje y dura 5 horas.',
+    }, [title, b ? h('span', { class: 'right', title: 'Inicio y fin de la ventana.' }, hm(b.start) + ' → ' + hm(b.end)) : null])]);
     if (!b) {
-      sec.append(h('div', { class: 'muted' }, 'Sin actividad en las últimas 5 horas: el próximo mensaje abrirá un bloque nuevo.'));
+      sec.append(h('div', { class: 'muted' }, 'Sin actividad de Claude Code en este ordenador en la ventana actual.'));
       return sec;
     }
     const ratio = max && max.freshTokens ? b.freshTokens / max.freshTokens : 0;
     const cls = ratio >= 1 ? 'bad' : ratio >= cfg.blockWarnRatio ? 'warn' : '';
-    const bigTip = `En este bloque llevas ${num(b.freshTokens)} tokens sin contar las relecturas de caché `
+    const bigTip = `En esta ventana, Claude Code ha usado aquí ${num(b.freshTokens)} tokens sin contar las relecturas de caché `
       + `(${fmt(b.tokens)} contándolas), sumando todos tus proyectos y subagentes.`
       + (max ? ` Es el ${Math.round(ratio * 100)} % de tu bloque más grande.` : '');
     sec.append(h('div', { title: bigTip }, [
-      max ? h('span', { class: 'pct ' + cls }, Math.round(ratio * 100) + '%') : null,
+      max ? h('span', { class: 'pct ' + cls, title: 'Comparado con tu bloque de 5 h más grande en este ordenador.' }, Math.round(ratio * 100) + '% de tu máx.') : null,
       h('span', { class: 'big' }, [fmt(b.freshTokens), h('span', { class: 'of' }, ' sin caché · ' + fmt(b.tokens) + ' total')]),
     ]));
-    if (max) {
+    // Sin % oficial, los cuadraditos comparan con tu bloque más grande
+    if (max && !hasOfficialPct) {
       const proj = Math.max(0, Math.min(b.projectedFresh, max.freshTokens) - b.freshTokens);
       sec.append(
         waffle([
@@ -183,7 +246,7 @@
           { value: proj, cls: 'b-proj' },
         ], max.freshTokens,
         `Cada cuadrado es el 1 % de tu bloque más grande (${fmt(max.freshTokens / 100)} tokens sin caché). `
-          + `Llenos: lo que llevas. Tenues: lo que llevarías al acabar el bloque si sigues al mismo ritmo.`
+          + `Rellenos: lo que llevas. Con borde: lo que llevarías al acabar el bloque si sigues al mismo ritmo. Apagados: lo que falta hasta tu máximo.`
           + (ratio >= 1 ? ' Ya has superado tu máximo.' : '')),
         legend([
           ['b-used', 'usado', 'Lo que llevas en este bloque (sin caché leída).'],
@@ -193,18 +256,17 @@
       );
     }
     sec.append(rows([
-      ['Se reinicia en', dur(b.minsLeft), `El bloque termina a las ${hm(b.end)}. Después, el siguiente mensaje abre uno nuevo.`],
-      max ? ['Tu bloque más grande', fmt(max.freshTokens) + ' (' + day(max.start) + ')', 'El bloque de 5 h en el que más has gastado (sin caché leída). Sirve de referencia para el %.'] : null,
+      hasOfficialPct ? null : ['Se reinicia en', dur(b.minsLeft), `La ventana termina a las ${hm(b.end)}.` + (b.alignedToOfficial ? ' Calculado desde el último reinicio oficial.' : ' Estimado.')],
+      max ? ['Tu bloque más grande', fmt(max.freshTokens) + ' (' + day(max.start) + ')', 'La ventana de 5 h en la que más ha gastado Claude Code en este ordenador (sin caché leída).'] : null,
       ['Ritmo (30 min)', fmt(b.perMinFresh) + '/min', 'Media de tokens por minuto (sin caché leída) en los últimos 30 minutos.'],
-      ['Si sigues así', fmt(b.projectedFresh), 'Lo que llevarías al terminar el bloque si mantienes el ritmo actual.'],
-      ['Llamadas', String(b.calls), 'Llamadas al modelo en este bloque, de todos tus proyectos.'],
-      cfg.showCost ? ['Coste equiv. API', money(b.cost), 'Lo que costaría este bloque por la API a precio público. Con Pro o Max no es lo que pagas.'] : null,
+      ['Si sigues así', fmt(b.projectedFresh), 'Lo que llevarías al terminar la ventana si mantienes el ritmo actual.'],
+      ['Llamadas', String(b.calls), 'Llamadas al modelo en esta ventana, de todos tus proyectos.'],
+      cfg.showCost ? ['Coste equiv. API', money(b.cost), 'Lo que costaría por la API a precio público. Con Pro o Max no es lo que pagas.'] : null,
     ]));
-    if (max && b.projectedFresh > max.freshTokens && ratio < 1) {
+    if (!hasOfficialPct && max && b.projectedFresh > max.freshTokens && ratio < 1) {
       sec.append(h('div', { class: 'warnline' }, '⚠ A este ritmo superarás tu bloque más grande antes de que se reinicie.'));
     }
     if (!max) sec.append(h('div', { class: 'note muted' }, st.scanDone ? 'Aún no hay bloques anteriores para comparar.' : 'Calculando tus bloques anteriores…'));
-    sec.append(h('div', { class: 'note muted' }, 'Estimación local con todo Claude Code de este ordenador; no es el % oficial de tu plan.'));
     return sec;
   }
 
@@ -220,11 +282,59 @@
     } else {
       kids.push(h('div', { class: 'empty' }, 'No hay ninguna sesión de Claude Code en esta carpeta todavía. En cuanto escribas a Claude aparecerá aquí.'));
     }
-    kids.push(blockSection(st));
+    kids.push(officialSection(st), blockSection(st));
     kids.push(h('button', { onclick: () => vscode.postMessage({ type: 'openPanel' }), title: 'Histórico de sesiones, gráfico por pregunta y bloques anteriores.' }, 'Abrir panel completo'));
     app.replaceChildren(...kids.filter(Boolean));
   }
 
-  window.addEventListener('message', (ev) => { if (ev.data && ev.data.type === 'state') render(ev.data); });
+  // ── Bocadillo explicativo ──
+  // Un solo elemento flotante; aparece al pasar el ratón por cualquier cosa con data-tip.
+  const bubble = h('div', { class: 'bubble', role: 'tooltip', 'aria-hidden': 'true' });
+  document.body.append(bubble);
+  let tipTarget = null, tipTimer = null;
+
+  function showTip(el) {
+    bubble.textContent = el.dataset.tip;
+    bubble.classList.add('on');
+    const r = el.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+    const bw = bubble.offsetWidth, bh = bubble.offsetHeight;
+    const mx = Math.min(Math.max(r.left + Math.min(r.width, 160) / 2, 8), vw - 8); // hacia donde apunta la flecha
+    const left = Math.min(Math.max(mx - bw / 2, 6), vw - bw - 6);
+    const below = r.bottom + 8 + bh <= vh || r.top - 8 - bh < 0;
+    bubble.classList.toggle('above', !below);
+    bubble.style.setProperty('left', left + 'px');
+    bubble.style.setProperty('top', (below ? r.bottom + 8 : r.top - 8 - bh) + 'px');
+    bubble.style.setProperty('--ax', (mx - left) + 'px');
+  }
+  function hideTip() {
+    clearTimeout(tipTimer);
+    tipTarget = null;
+    bubble.classList.remove('on');
+  }
+  document.addEventListener('mouseover', (e) => {
+    const el = e.target.closest && e.target.closest('[data-tip]');
+    if (el === tipTarget) return;
+    hideTip();
+    if (!el) return;
+    tipTarget = el;
+    tipTimer = setTimeout(() => { if (tipTarget === el && el.isConnected) showTip(el); }, 250);
+  });
+  document.addEventListener('mouseleave', hideTip);
+  window.addEventListener('scroll', hideTip, true);
+  window.addEventListener('blur', hideTip);
+
+  window.addEventListener('message', (ev) => {
+    if (!(ev.data && ev.data.type === 'state')) return;
+    // Si el bocadillo estaba abierto, se mantiene sobre el mismo dato tras repintar
+    // (por posición: el texto puede cambiar, p. ej. los minutos que faltan)
+    const open = tipTarget && bubble.classList.contains('on');
+    const idx = open ? [...document.querySelectorAll('[data-tip]')].indexOf(tipTarget) : -1;
+    render(ev.data);
+    if (open) {
+      const again = document.querySelectorAll('[data-tip]')[idx];
+      if (again) { tipTarget = again; showTip(again); } else hideTip();
+    }
+  });
   vscode.postMessage({ type: 'ready' });
 })();

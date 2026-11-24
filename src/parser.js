@@ -387,6 +387,44 @@ async function findActiveSession(workspacePaths, root = PROJECTS_DIR, { fallback
   return null;
 }
 
+// ── Uso oficial del plan ────────────────────────────────────────────────────
+// Claude Code guarda en ~/.claude.json (solo lectura) el último uso oficial que consultó a
+// Anthropic: % de la ventana de 5 h, % semanal y sus horas de reinicio. Solo se extraen esos
+// campos (nada de la cuenta). Se vuelve a leer solo si el archivo ha cambiado.
+function claudeJsonPath() {
+  const dir = process.env.CLAUDE_CONFIG_DIR;
+  return dir ? path.join(dir, '.claude.json') : path.join(os.homedir(), '.claude.json');
+}
+
+function parseOfficialUsage(j) {
+  const u = j && j.cachedUsageUtilization;
+  const util = u && u.utilization;
+  if (!util) return null;
+  const win = (w) => w && typeof w.utilization === 'number' && w.resets_at
+    ? { pct: w.utilization, resetsAt: Date.parse(w.resets_at) } : null;
+  const bd = util.seven_day_breakdown;
+  return {
+    fetchedAt: typeof u.fetchedAtMs === 'number' ? u.fetchedAtMs : null,
+    fiveHour: win(util.five_hour),
+    sevenDay: win(util.seven_day),
+    weeklyBreakdown: bd && Array.isArray(bd.rows)
+      ? bd.rows.filter(r => r && r.percent > 0).map(r => ({ name: String(r.display_name || r.key), percent: r.percent, percentOfLimit: r.percent_of_limit }))
+      : [],
+  };
+}
+
+let officialCache = { key: null, value: null };
+async function readOfficialUsage(file = claudeJsonPath()) {
+  let st;
+  try { st = await fsp.stat(file); } catch { return null; }
+  const key = `${file}|${st.mtimeMs}|${st.size}`;
+  if (officialCache.key === key) return officialCache.value;
+  let value = null;
+  try { value = parseOfficialUsage(JSON.parse(await fsp.readFile(file, 'utf8'))); } catch {}
+  officialCache = { key, value };
+  return value;
+}
+
 // Lee (sin modificar) la configuración de Claude Code para saber si el 1M está desactivado
 // o si hay un modelo [1m] elegido. Mira variables de entorno y los settings de usuario y proyecto.
 async function readClaudeEnv(workspacePaths) {
@@ -409,7 +447,7 @@ async function readClaudeEnv(workspacePaths) {
 }
 
 module.exports = {
-  readClaudeEnv,
+  readClaudeEnv, readOfficialUsage, parseOfficialUsage,
   PROJECTS_DIR, SessionState, IncrementalReader, parseSessionFile, listSessionFiles,
   findActiveSession, subagentFiles, feedSubagentFile, feedSubagentLine, readWholeFile, contextWindowFor, callCost, usageTotal,
   contextOf, freshOf, encodeProjectDir, normPath, readUsage,

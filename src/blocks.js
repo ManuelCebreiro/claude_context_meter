@@ -46,20 +46,28 @@ function newBlock(start, firstTs) {
   return { start, end: start + H5, tokens: 0, freshTokens: 0, cost: 0, calls: 0, first: firstTs, last: firstTs, models: {} };
 }
 
-// `anchor` (opcional): inicio de un bloque ya conocido por el escaneo completo.
-// Las llamadas anteriores se ignoran y las que caen dentro de [anchor, anchor + 5 h)
-// van a ese bloque. Sin ancla, la cadena de bloques empezaría en la primera llamada
-// que vemos, y con uso continuo los bloques quedarían desplazados respecto a los reales.
-function buildBlocks(calls, pricing, anchor) {
+// Un bloque empieza con la primera llamada después de que termine el anterior y dura 5 h
+// (como la ventana oficial: no se redondea a la hora en punto, solo al minuto).
+// `opts` (opcional; un número equivale a { anchor }):
+//  - anchor: inicio de un bloque ya conocido (p. ej. la ventana oficial actual). Las llamadas
+//    anteriores se ignoran y las de [anchor, anchor + 5 h) van a ese bloque.
+//  - after: final de una ventana conocida (p. ej. el último reinicio oficial). Las llamadas
+//    anteriores se ignoran y la siguiente abre un bloque nuevo.
+// Sin ninguno, la cadena empieza en la primera llamada que vemos y con uso continuo podría
+// quedar desplazada respecto a la real.
+function buildBlocks(calls, pricing, opts) {
+  if (typeof opts === 'number') opts = { anchor: opts };
+  const anchor = opts && opts.anchor != null ? opts.anchor : null;
+  const after = opts && opts.after != null ? opts.after : null;
   const sorted = [...calls].sort((a, b) => a.ts - b.ts);
   const blocks = [];
   let cur = null, curPushed = false;
   if (anchor != null) cur = newBlock(anchor, null);
   for (const c of sorted) {
     if (anchor != null && c.ts < anchor) continue;
+    if (after != null && c.ts < after) continue;
     if (!cur || c.ts >= cur.end) {
-      const start = new Date(c.ts); start.setMinutes(0, 0, 0);
-      cur = newBlock(start.getTime(), c.ts);
+      cur = newBlock(Math.floor(c.ts / 60000) * 60000, c.ts);
       curPushed = false;
     }
     if (!curPushed) { if (cur.first == null) cur.first = c.ts; blocks.push(cur); curPushed = true; }
@@ -136,6 +144,7 @@ class LiveBlocks {
     this.pricing = pricing;
     this.store = new CallStore(root);
     this.anchor = null;         // inicio del último bloque según el escaneo completo
+    this.officialReset = null;  // hora de reinicio oficial de la ventana de 5 h (ms), si se conoce
     this.lastPoll = 0;
     this.lastList = 0;
     this.recentFiles = [];
@@ -160,7 +169,7 @@ class LiveBlocks {
   }
 
   current(now = Date.now()) {
-    const key = `${this.store.version}|${this.anchor}|${Math.floor(now / 60000)}`;
+    const key = `${this.store.version}|${this.anchor}|${this.officialReset}|${Math.floor(now / 60000)}`;
     if (this._cache && this._cache.key === key && this._cache.pricing === this.pricing) return this._cache.value;
     const value = this._compute(now);
     this._cache = { key, pricing: this.pricing, value };
@@ -168,13 +177,20 @@ class LiveBlocks {
   }
 
   _compute(now) {
-    // Con ancla, el bloque se reconstruye desde ella; sin ancla (antes del primer
-    // escaneo completo) se usa la ventana de las últimas 10 h.
-    const from = this.anchor != null ? this.anchor : now - LIVE_WINDOW;
+    // Prioridad: 1) la ventana oficial (su hora de reinicio la da Anthropic); si ya terminó,
+    // la siguiente empieza con la primera llamada posterior. 2) el ancla del escaneo completo.
+    // 3) sin nada, la ventana de las últimas 10 h.
+    const R = this.officialReset;
+    let opts, from, official = false;
+    if (R != null && R > now) { opts = { anchor: R - H5 }; from = R - H5; official = true; }
+    else if (R != null) { opts = { after: R }; from = R; official = true; }
+    else if (this.anchor != null) { opts = { anchor: this.anchor }; from = this.anchor; }
+    else { opts = undefined; from = now - LIVE_WINDOW; }
     const calls = this.store.callsSince(Math.min(from, now - 30 * 60000));
-    const blocks = buildBlocks(calls, this.pricing, this.anchor != null ? this.anchor : undefined);
+    const blocks = buildBlocks(calls, this.pricing, opts);
     const b = blocks[blocks.length - 1];
     if (!b || now >= b.end) return null;
+    b.alignedToOfficial = official; // las horas vienen de la ventana oficial (no estimadas)
     // Ritmo: tokens de los últimos 30 min (total y sin caché leída)
     let recent = 0, recentFresh = 0;
     for (const c of calls) if (c.ts >= now - 30 * 60000 && c.ts >= b.start) {

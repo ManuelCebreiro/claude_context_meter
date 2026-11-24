@@ -13,11 +13,12 @@ const T0 = (() => { const d = new Date('2026-11-24T00:00:00'); return d.getTime(
 const call = (id, ts, u = { input: 1 }) => ({ id, ts, model: 'claude-opus-5-5', usage: usage(u) });
 const starts = (blocks) => blocks.map(b => (b.start - T0) / H);
 
-test('buildBlocks: el bloque empieza en la hora en punto y dura 5 h', () => {
-  const blocks = B.buildBlocks([call('a', T0 + 1.5 * H), call('b', T0 + 6.4 * H), call('c', T0 + 6.6 * H)]);
-  assert.deepEqual(starts(blocks), [1, 6]);
+test('buildBlocks: el bloque empieza con la primera llamada (al minuto, sin redondear a la hora) y dura 5 h', () => {
+  const blocks = B.buildBlocks([call('a', T0 + 1.5 * H + 25_000), call('b', T0 + 6.4 * H), call('c', T0 + 6.6 * H)]);
+  assert.deepEqual(starts(blocks), [1.5, 6.6]);
   assert.equal(blocks[0].end - blocks[0].start, 5 * H);
-  assert.equal(blocks[1].calls, 2);
+  assert.equal(blocks[0].calls, 2);
+  assert.equal(blocks[1].calls, 1);
 });
 
 test('buildBlocks: cuenta total, sin caché leída y coste', () => {
@@ -107,7 +108,7 @@ test('LiveBlocks: con ancla, el bloque actual sigue alineado tras 12 h de uso co
   const hour = (() => { const d = new Date(now); d.setMinutes(0, 0, 0); return d.getTime(); })();
   // Llamadas cada 20 min desde hace 12 h: los bloques reales empiezan en hour-12, hour-7 y hour-2
   const lines = [];
-  for (let m = 12 * 60; m >= 20; m -= 20) lines.push(assistantLine('c' + m, hour - m * 60000 + 60000, { input: 1 }));
+  for (let m = 12 * 60; m >= 20; m -= 20) lines.push(assistantLine('c' + m, hour - m * 60000, { input: 1 }));
   writeLines(path.join(root, 'p', 'a.jsonl'), lines);
   const lb = new B.LiveBlocks(null, root);
   const all = await lb.scanAll(now - 90 * 24 * H);
@@ -137,4 +138,46 @@ test('scanAllBlocks: escanea la carpeta indicada y respeta la fecha mínima', as
   ]);
   const blocks = await B.scanAllBlocks(null, T0, root);
   assert.deepEqual(starts(blocks), [1, 7]);
+});
+
+test('buildBlocks: con `after`, la primera llamada posterior abre el bloque', () => {
+  const blocks = B.buildBlocks([call('a', T0 + 1 * H), call('b', T0 + 3.25 * H), call('c', T0 + 4 * H)], null, { after: T0 + 3 * H });
+  assert.deepEqual(starts(blocks), [3.25]);
+  assert.equal(blocks[0].calls, 2);
+});
+
+test('LiveBlocks: con reinicio oficial futuro, la ventana es la oficial', async (t) => {
+  const root = tmpDir(t);
+  const now = Date.now();
+  writeLines(path.join(root, 'p', 'a.jsonl'), [
+    assistantLine('x', now - 3 * H, { input: 5 }),     // antes de la ventana oficial: no cuenta
+    assistantLine('y', now - 30 * 60000, { input: 7 }),
+  ]);
+  const lb = new B.LiveBlocks(null, root);
+  await lb.poll(now, true);
+  const R = now + 4 * H + 10 * 60000;                   // la oficial termina dentro de 4 h 10 min
+  lb.officialReset = R;
+  const cur = lb.current(now);
+  assert.equal(cur.start, R - 5 * H);
+  assert.equal(cur.end, R);
+  assert.equal(cur.freshTokens, 7);
+  assert.equal(cur.alignedToOfficial, true);
+});
+
+test('LiveBlocks: si el reinicio oficial ya pasó, la ventana empieza con la primera llamada posterior', async (t) => {
+  const root = tmpDir(t);
+  const now = Date.now();
+  const R = now - 10 * 60000;                           // se reinició hace 10 min
+  writeLines(path.join(root, 'p', 'a.jsonl'), [
+    assistantLine('x', R - 60000, { input: 5 }),
+    assistantLine('y', R + 20_000, { input: 7 }),        // 20 s después del reinicio
+    assistantLine('z', now - 60000, { input: 9 }),
+  ]);
+  const lb = new B.LiveBlocks(null, root);
+  await lb.poll(now, true);
+  lb.officialReset = R;
+  const cur = lb.current(now);
+  assert.equal(cur.start, Math.floor((R + 20_000) / 60000) * 60000);
+  assert.equal(cur.freshTokens, 16);
+  assert.equal(cur.alignedToOfficial, true);
 });

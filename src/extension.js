@@ -54,6 +54,8 @@ async function pollSubagents(L) {
 // Un tick a la vez: si una lectura grande tarda más que pollMs, el siguiente se salta.
 let ticking = false;
 let lastFallback = 0;
+// Uso oficial (de ~/.claude.json, lo guarda Claude Code al consultar a Anthropic)
+let official = null, lastOfficialRead = 0;
 async function tick() {
   if (ticking) return;
   ticking = true;
@@ -66,6 +68,15 @@ async function tickOnce() {
     lastEnvRead = now;
     const e = await P.readClaudeEnv(workspacePaths());
     if (e.disable1m !== claudeEnv.disable1m || e.model1m !== claudeEnv.model1m) { claudeEnv = e; lastSummary = null; }
+  }
+  if (now - lastOfficialRead > 15000) {
+    lastOfficialRead = now;
+    const o = await P.readOfficialUsage();
+    if (o !== official) {
+      official = o;
+      getLiveBlocks().officialReset = o && o.fiveHour ? o.fiveHour.resetsAt : null;
+      showBlocks(true);
+    }
   }
   pollBlocks(now);
   if (!live || now - lastActiveCheck > 4000) {
@@ -126,7 +137,8 @@ async function pollBlocks(now, force = false) {
 // Pinta el bloque actual (sin leer archivos). `force`: repintar aunque no haya cambiado.
 function showBlocks(force = false) {
   const b = getLiveBlocks().current(Date.now());
-  const key = b ? `${b.start}|${b.tokens}|${b.freshTokens}|${Math.floor(b.minsLeft)}` : 'none';
+  // Incluye el minuto actual y el dato oficial: la cuenta atrás oficial avanza aunque no haya actividad aquí
+  const key = (b ? `${b.start}|${b.tokens}|${b.freshTokens}` : 'none') + `|${Math.floor(Date.now() / 60000)}|${official ? official.fetchedAt : ''}`;
   if (!force && key === lastBlockKey) return;
   lastBlockKey = key;
   lastBlock = b;
@@ -135,37 +147,70 @@ function showBlocks(force = false) {
   if (panel) panel.webview.postMessage({ type: 'blocks', current: b, past: pastBlocks.slice(-30), max: personalMax() });
 }
 
+// Uso oficial válido ahora mismo: la ventana de 5 h solo vale si aún no se ha reiniciado
+function officialState(now = Date.now()) {
+  const o = official;
+  if (!o) return null;
+  const five = o.fiveHour && o.fiveHour.resetsAt > now ? o.fiveHour : null;
+  const week = o.sevenDay && o.sevenDay.resetsAt > now ? o.sevenDay : null;
+  return {
+    five, week,
+    expiredAt: o.fiveHour && o.fiveHour.resetsAt <= now ? o.fiveHour.resetsAt : null,
+    fetchedAt: o.fetchedAt,
+    breakdown: o.weeklyBreakdown || [],
+  };
+}
+
+const ago = (ms) => {
+  const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
+  return m < 1 ? 'hace un momento' : m < 60 ? `hace ${m} min` : `hace ${dur(m)}`;
+};
+const dayTime = (ms) => new Date(ms).toLocaleString('es-ES', { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
 function renderBlock(b) {
   const c = cfg();
   if (!c.get('showBlock') || statusBarMode() !== 'all') { blkItem.hide(); return; }
-  if (!b) {
-    blkItem.text = '$(clock) 5h: —';
-    blkItem.tooltip = 'No hay llamadas de Claude Code en las últimas 5 horas: el próximo mensaje abrirá un bloque nuevo.';
-    blkItem.backgroundColor = undefined;
-    blkItem.show();
-    return;
-  }
+  const now = Date.now();
+  const off = officialState(now);
   const max = personalMax();
-  const ratio = max && max.freshTokens ? b.freshTokens / max.freshTokens : 0;
-  // Texto corto (la barra de estado suele ir llena): sin caché (total) · % de tu máximo · tiempo restante
-  blkItem.text = `$(clock) 5h ${fmt(b.freshTokens)} (${fmt(b.tokens)})${max ? ` · ${Math.round(ratio * 100)}%` : ''} · ${dur(b.minsLeft)}`;
-  blkItem.backgroundColor = ratio >= 1 ? new vscode.ThemeColor('statusBarItem.errorBackground')
-    : ratio >= c.get('blockWarnRatio') ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
   const md = new vscode.MarkdownString(undefined, true);
   md.supportThemeIcons = true;
-  md.appendMarkdown(`**Bloque de 5 h actual** (estimado): ${hm(b.start)} → ${hm(b.end)}  \n`);
-  md.appendMarkdown(`Se reinicia en **${dur(b.minsLeft)}**\n\n`);
-  md.appendMarkdown(`_En la barra: tokens sin caché leída (total) · % de tu bloque más grande · tiempo hasta el reinicio_\n\n`);
-  md.appendMarkdown(`| | |\n|---|---:|\n`);
-  md.appendMarkdown(`| Tokens sin caché leída | ${fmt(b.freshTokens)} |\n| Tokens procesados (total) | ${fmt(b.tokens)} |\n`);
-  md.appendMarkdown(`| Leídos de caché | ${fmt(b.tokens - b.freshTokens)} |\n| Llamadas a la API | ${b.calls} |\n`);
-  if (c.get('showCost')) md.appendMarkdown(`| Coste equiv. API | ${money(b.cost)} |\n`);
-  md.appendMarkdown(`| Ritmo sin caché (últimos 30 min) | ${fmt(b.perMinFresh)}/min |\n| Si sigues así, al acabar | ${fmt(b.projectedFresh)} sin caché |\n`);
-  if (max) md.appendMarkdown(`| Tu bloque más grande | ${fmt(max.freshTokens)} sin caché (${new Date(max.start).toLocaleDateString('es-ES')}) |\n`);
-  md.appendMarkdown(`\n_El % de tu máximo se calcula sin la caché leída: esas relecturas se repiten en cada llamada y harían parecer el total mucho mayor de lo que de verdad gastas._\n\n`);
-  if (max && b.projectedFresh > max.freshTokens && ratio < 1) md.appendMarkdown(`$(warning) A este ritmo superarás tu bloque más grande antes de que se reinicie.\n\n`);
-  if (!max) md.appendMarkdown(blockScanDone ? '_Aún no hay bloques anteriores para comparar._\n\n' : '_Calculando tus bloques anteriores…_\n\n');
-  md.appendMarkdown(`_Suma todo Claude Code de este ordenador (todos los proyectos y subagentes). No incluye el chat de claude.ai ni otros equipos, y no es el % oficial de tu plan._\n\n`);
+
+  if (off && off.five) {
+    // Dato oficial: % de la ventana y hora de reinicio que da Anthropic
+    const pct = off.five.pct;
+    const mins = (off.five.resetsAt - now) / 60000;
+    blkItem.text = `$(clock) 5h ${pct}% · ${dur(mins)}`;
+    blkItem.backgroundColor = pct >= 95 ? new vscode.ThemeColor('statusBarItem.errorBackground')
+      : pct >= c.get('blockWarnRatio') * 100 ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
+    md.appendMarkdown(`**Límite de 5 h: ${pct}% usado** (dato oficial)  \n`);
+    md.appendMarkdown(`Se reinicia a las **${hm(off.five.resetsAt)}** (en ${dur(mins)})  \n`);
+    if (off.week) md.appendMarkdown(`Límite semanal: **${off.week.pct}%** · se reinicia ${dayTime(off.week.resetsAt)}  \n`);
+    if (off.fetchedAt) md.appendMarkdown(`_Dato de Claude Code de ${ago(off.fetchedAt)}; se actualiza cuando Claude Code lo consulta (por ejemplo con /usage)._\n\n`);
+  } else if (b) {
+    const ratio = max && max.freshTokens ? b.freshTokens / max.freshTokens : 0;
+    blkItem.text = `$(clock) 5h ${fmt(b.freshTokens)} (${fmt(b.tokens)})${max ? ` · ${Math.round(ratio * 100)}%` : ''} · ${dur(b.minsLeft)}`;
+    blkItem.backgroundColor = ratio >= 1 ? new vscode.ThemeColor('statusBarItem.errorBackground')
+      : ratio >= c.get('blockWarnRatio') ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
+    md.appendMarkdown(`**Bloque de 5 h** ${b.alignedToOfficial ? '' : '(estimado) '}: ${hm(b.start)} → ${hm(b.end)}, se reinicia en **${dur(b.minsLeft)}**  \n`);
+    if (off && off.expiredAt) md.appendMarkdown(`_La ventana oficial se reinició a las ${hm(off.expiredAt)}; el nuevo % aparecerá cuando Claude Code lo vuelva a consultar (por ejemplo con /usage)._\n\n`);
+    else md.appendMarkdown(`_En la barra: tokens sin caché leída (total) · % de tu bloque más grande · tiempo hasta el reinicio. Sin dato oficial: Claude Code aún no ha guardado tu uso del plan._\n\n`);
+  } else {
+    blkItem.text = '$(clock) 5h: —';
+    blkItem.backgroundColor = undefined;
+    md.appendMarkdown(off && off.expiredAt
+      ? `La ventana de 5 h se reinició a las ${hm(off.expiredAt)}. La siguiente empieza con tu próximo mensaje (aquí, en claude.ai o en Cowork).\n\n`
+      : 'No hay llamadas de Claude Code en las últimas 5 horas: el próximo mensaje abrirá un bloque nuevo.\n\n');
+  }
+
+  if (b) {
+    md.appendMarkdown(`| Este ordenador, en esta ventana | |\n|---|---:|\n`);
+    md.appendMarkdown(`| Tokens sin caché leída | ${fmt(b.freshTokens)} |\n| Tokens procesados (total) | ${fmt(b.tokens)} |\n| Llamadas a la API | ${b.calls} |\n`);
+    if (c.get('showCost')) md.appendMarkdown(`| Coste equiv. API | ${money(b.cost)} |\n`);
+    md.appendMarkdown(`| Ritmo sin caché (30 min) | ${fmt(b.perMinFresh)}/min |\n`);
+    if (max) md.appendMarkdown(`| Tu bloque más grande | ${fmt(max.freshTokens)} sin caché (${new Date(max.start).toLocaleDateString('es-ES')}) |\n`);
+    md.appendMarkdown(`\n_Los tokens son solo los de Claude Code en este ordenador: no incluyen claude.ai, Cowork ni otros equipos._\n\n`);
+  }
   md.appendMarkdown(`[$(graph) Abrir panel](command:claudeMeter.openPanel)`);
   md.isTrusted = { enabledCommands: ['claudeMeter.openPanel'] };
   blkItem.tooltip = md;
@@ -191,21 +236,30 @@ async function scanBlocksBackground() {
     // fusionar con los guardados (sobreviven a la limpieza de transcripts)
     const file = path.join(ctxRef.globalStorageUri.fsPath, 'blocks.json');
     let saved = [];
-    try { saved = JSON.parse(await fsp.readFile(file, 'utf8')); } catch {}
+    try {
+      const j = JSON.parse(await fsp.readFile(file, 'utf8'));
+      saved = Array.isArray(j) ? j : (j && Array.isArray(j.blocks) ? j.blocks : []);
+    } catch {}
     const now = Date.now();
-    const byStart = new Map(saved.map(b => [b.start, b]));
-    for (const b of all) if (b.end <= now) {
-      const prev = byStart.get(b.start);
-      // >= : con los mismos tokens se queda el recién calculado (precios actuales);
-      // también sustituye a los guardados por versiones sin freshTokens
-      if (!prev || b.tokens >= prev.tokens || typeof prev.freshTokens !== 'number') byStart.set(b.start, b);
+    const ended = all.filter(b => b.end <= now);
+    // Los recalculados mandan en su franja horaria: un bloque guardado que se solapa con uno
+    // recalculado se descarta (p. ej. los de versiones anteriores, redondeados a la hora).
+    // Excepción: mismo inicio y más tokens guardados (Claude Code borró parte de esos transcripts).
+    const merged = [];
+    for (const s of saved) {
+      if (typeof s.start !== 'number' || typeof s.end !== 'number') continue;
+      const over = ended.filter(b => b.start < s.end && s.start < b.end);
+      if (!over.length) merged.push(s);
+      else if (over.length === 1 && over[0].start === s.start && s.tokens > over[0].tokens && typeof s.freshTokens === 'number') {
+        merged.push(s); ended.splice(ended.indexOf(over[0]), 1);
+      }
     }
-    pastBlocks = [...byStart.values()].sort((a, b) => a.start - b.start);
+    pastBlocks = merged.concat(ended).sort((a, b) => a.start - b.start);
     // Ancla para el bloque en vivo: el inicio del bloque más reciente conocido
     let anchor = null;
     for (const b of all.concat(pastBlocks)) if (b.start <= now && (anchor == null || b.start > anchor)) anchor = b.start;
     getLiveBlocks().anchor = anchor;
-    if (saveToDisk()) await writeJsonAtomic(file, pastBlocks);
+    if (saveToDisk()) await writeJsonAtomic(file, { version: 2, blocks: pastBlocks });
   } catch (e) { console.error('claudeMeter: escaneo de bloques', e); }
   finally { blockScanRunning = false; }
   blockScanDone = true;
@@ -302,6 +356,7 @@ function updateView() {
     type: 'state',
     live: slimLive(viewLive),
     block: lastBlock,
+    official: officialState(),
     max: max ? { freshTokens: max.freshTokens, start: max.start } : null,
     scanDone: blockScanDone,
     cfg: { ...panelConfig(), showBlock: cfg().get('showBlock') },

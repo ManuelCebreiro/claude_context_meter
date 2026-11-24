@@ -13,7 +13,7 @@ Extensión de VS Code (JavaScript puro, sin dependencias ni compilación) que mu
 3. Vista "Claude Meter" (`claudeMeter.view`, `media/view.js` + `media/view.css`): webview view registrada en el contenedor `claude-sidebar-secondary` de la extensión de Claude Code, así aparece debajo de su chat (si Claude Code no está instalado, VS Code la pone en el Explorador). `render()` y `showBlocks()` llaman a `updateView()`, que envía un único mensaje `state` con lo justo (`slimLive`). La barra de estado usa textos cortos y `claudeMeter.statusBar` (`all` / `context` / `none`).
 4. Panel (`claudeMeter.openPanel`): webview con `media/panel.js` + `media/panel.css`; recibe datos por `postMessage` (`config`, `live`, `history`, `blocks`, `detail`).
 5. Histórico: `scanHistory()` guarda un resumen de cada sesión en `globalStorage/history.json`; `scanBlocksBackground()` (cada hora) guarda los bloques de 5 h en `globalStorage/blocks.json`. Así sobreviven aunque Claude Code borre transcripts antiguos. El escaneo de bloques usa el mismo `CallStore` que `LiveBlocks`: solo lee lo que ha cambiado desde la vez anterior.
-6. Bloque de 5 h: `tokens` (total) y `freshTokens` (sin caché leída). El % de tu máximo, el ritmo y la proyección usan `freshTokens`.
+6. Bloque de 5 h: `tokens` (total) y `freshTokens` (sin caché leída). El % de tu máximo, el ritmo y la proyección usan `freshTokens`. `blocks.json` se guarda como `{ version: 2, blocks }`; al fusionar, los bloques recalculados mandan en su franja horaria.
 
 ## Reglas importantes
 - Nunca escribir en `~/.claude/` (ni settings ni hooks). Sin red.
@@ -22,7 +22,8 @@ Extensión de VS Code (JavaScript puro, sin dependencias ni compilación) que mu
 - Contexto = `input + cache_creation + cache_read` de la última llamada del hilo principal (igual que Claude Code; sin output).
 - Ventana de contexto (`contextWindowFor` en `src/parser.js`), según la documentación de Claude Code: 1M por defecto en Fable 5+, Mythos 5+, Sonnet 5+, Haiku 5.5 y Opus 4.7+; Opus/Sonnet 4.6 solo con `[1m]`; el resto 200K; `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` fuerza 200K.
 - Precios en `PRICES` (`src/parser.js`), USD por millón: [input, output, cacheWrite5m, cacheWrite1h, cacheRead].
-- El bloque de 5 h es una estimación local; no es el % oficial del plan.
+- Uso oficial del plan: `P.readOfficialUsage()` lee (solo lectura) `cachedUsageUtilization` de `~/.claude.json`, que Claude Code guarda al consultar a Anthropic (p. ej. con /usage): % de la ventana de 5 h, % semanal, horas de reinicio y reparto semanal por producto. Puede estar desactualizado: mostrar siempre su antigüedad. Solo se extraen esos campos, nada de la cuenta.
+- La ventana de 5 h en vivo se alinea con el reinicio oficial (`LiveBlocks.officialReset`); si ya pasó, la siguiente empieza con la primera llamada posterior. Los bloques no se redondean a la hora (solo al minuto). Los tokens locales solo cubren Claude Code de este ordenador (no claude.ai, Cowork ni otros equipos).
 
 ## Probar y empaquetar
 - Tests: `npm test` (node:test, sin dependencias; usan carpetas temporales, nunca `~/.claude`).

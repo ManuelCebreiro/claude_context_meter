@@ -280,3 +280,46 @@ test('readClaudeEnv: un settings con JSON roto se ignora', async (t) => {
   const env = await P.readClaudeEnv([ws]);
   assert.equal(typeof env.disable1m, 'boolean');
 });
+
+// ── Uso oficial (~/.claude.json) ────────────────────────────────────────────
+const officialSample = {
+  oauthAccount: { emailAddress: 'no-debe-salir@example.com' },
+  cachedUsageUtilization: {
+    fetchedAtMs: 1795517263052, accountUuid: 'no-debe-salir',
+    utilization: {
+      five_hour: { utilization: 26, resets_at: '2026-11-24T11:50:00.358980+00:00' },
+      seven_day: { utilization: 23, resets_at: '2026-11-29T00:00:00.359000+00:00' },
+      seven_day_breakdown: { rows: [
+        { key: 'claude_code', display_name: 'Claude Code', percent: 10, percent_of_limit: 2 },
+        { key: 'chat', display_name: 'Chats', percent: 0, percent_of_limit: 0 },
+        { key: 'cowork', display_name: 'Cowork', percent: 90, percent_of_limit: 21 },
+      ] },
+    },
+  },
+};
+
+test('parseOfficialUsage: extrae solo el % y los reinicios, sin datos de la cuenta', () => {
+  const o = P.parseOfficialUsage(officialSample);
+  assert.deepEqual(o, {
+    fetchedAt: 1795517263052,
+    fiveHour: { pct: 26, resetsAt: Date.parse('2026-11-24T11:50:00.358Z') },
+    sevenDay: { pct: 23, resetsAt: Date.parse('2026-11-29T00:00:00.359Z') },
+    weeklyBreakdown: [
+      { name: 'Claude Code', percent: 10, percentOfLimit: 2 },
+      { name: 'Cowork', percent: 90, percentOfLimit: 21 },
+    ],
+  });
+  assert.ok(!JSON.stringify(o).includes('no-debe-salir'));
+  assert.equal(P.parseOfficialUsage({}), null);
+});
+
+test('readOfficialUsage: lee el archivo, reutiliza el resultado si no cambia y no lo modifica', async (t) => {
+  const f = path.join(tmpDir(t), '.claude.json');
+  fs.writeFileSync(f, JSON.stringify(officialSample));
+  const before = fs.statSync(f).mtimeMs;
+  const a = await P.readOfficialUsage(f);
+  assert.equal(a.fiveHour.pct, 26);
+  assert.equal(await P.readOfficialUsage(f), a, 'mismo objeto si el archivo no ha cambiado');
+  assert.equal(fs.statSync(f).mtimeMs, before);
+  assert.equal(await P.readOfficialUsage(f + '.no-existe'), null);
+});
