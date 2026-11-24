@@ -12,7 +12,6 @@ let live = null;          // { file, state, reader, subReaders: Map }
 let lastActiveCheck = 0;
 let lastSummary = null;
 let history = null;       // { version, sessions: { [file]: { size, mtime, deleted?, s } } }
-let scanning = false;
 let claudeEnv = { disable1m: false, model1m: false };
 let lastEnvRead = 0;
 
@@ -44,7 +43,7 @@ function attachLive(file) {
 }
 
 async function pollSubagents(L) {
-  for (const sf of P.subagentFiles(L.file)) {
+  for (const sf of await P.subagentFiles(L.file)) {
     if (!L.subReaders.has(sf)) L.subReaders.set(sf, new P.IncrementalReader(sf, (line) => P.feedSubagentLine(L.state, line)));
   }
   let changed = false;
@@ -65,7 +64,7 @@ async function tickOnce() {
   const now = Date.now();
   if (now - lastEnvRead > 15000) {
     lastEnvRead = now;
-    const e = P.readClaudeEnv(workspacePaths());
+    const e = await P.readClaudeEnv(workspacePaths());
     if (e.disable1m !== claudeEnv.disable1m || e.model1m !== claudeEnv.model1m) { claudeEnv = e; lastSummary = null; }
   }
   pollBlocks(now);
@@ -74,7 +73,7 @@ async function tickOnce() {
     // El plan B (revisar todos los proyectos) solo cada 30 s
     const fallback = now - lastFallback > 30000;
     if (fallback) lastFallback = now;
-    const f = P.findActiveSession(workspacePaths(), undefined, { fallback });
+    const f = await P.findActiveSession(workspacePaths(), undefined, { fallback });
     if (f && (!live || live.file !== f)) attachLive(f);
     // Sin el plan B no podemos saber si la sesión actual (de una subcarpeta) sigue siendo la buena
     else if (!f && live && fallback) live = null;
@@ -202,7 +201,7 @@ async function scanBlocksBackground() {
     let anchor = null;
     for (const b of all.concat(pastBlocks)) if (b.start <= now && (anchor == null || b.start > anchor)) anchor = b.start;
     getLiveBlocks().anchor = anchor;
-    await writeJsonAtomic(file, pastBlocks);
+    if (saveToDisk()) await writeJsonAtomic(file, pastBlocks);
   } catch (e) { console.error('claudeMeter: escaneo de bloques', e); }
   finally { blockScanRunning = false; }
   blockScanDone = true;
@@ -276,7 +275,11 @@ function loadHistory() {
   return historyLoading;
 }
 
+// Con claudeMeter.saveToDisk desactivado no se escribe nada: el histórico solo vive en memoria
+const saveToDisk = () => cfg().get('saveToDisk') !== false;
+
 async function saveHistory() {
+  if (!saveToDisk() || !history) return;
   try { await writeJsonAtomic(historyFile(), history); }
   catch (e) { console.error('claudeMeter: no se pudo guardar el histórico', e); }
 }
@@ -285,12 +288,27 @@ function compact(s) {
   return { ...s, perPrompt: s.perPrompt.map(p => ({ ...p, text: p.text.slice(0, 400) })) };
 }
 
-async function scanHistory(progress) {
-  if (scanning) return;
-  scanning = true;
-  try {
+// Un solo escaneo a la vez. Quien llama mientras hay uno en curso espera a que acabe
+// (antes volvía enseguida y el panel recibía un histórico a medias marcado como terminado)
+// y se hace una pasada más, que solo lee lo que haya cambiado entretanto.
+let historyScan = null, historyScanAgain = false;
+const scanProgress = new Set();
+function scanHistory(progress) {
+  if (progress) scanProgress.add(progress);
+  if (historyScan) { historyScanAgain = true; return historyScan; }
+  historyScan = (async () => {
+    try {
+      do { historyScanAgain = false; await scanHistoryOnce(); } while (historyScanAgain);
+    } finally { historyScan = null; scanProgress.clear(); }
+  })();
+  return historyScan;
+}
+
+async function scanHistoryOnce() {
+  const progress = (i, n) => { for (const p of scanProgress) p(i, n); };
+  {
     const h = await loadHistory();
-    const files = P.listSessionFiles();
+    const files = await P.listSessionFiles();
     const present = new Set(files.map(f => f.file));
     const prices = pricing();
     const cw = cfg().get('contextWindow');
@@ -301,11 +319,11 @@ async function scanHistory(progress) {
         const s = await P.parseSessionFile(f.file, prices, cw, claudeEnv);
         if (s.apiCalls > 0 || s.prompts > 0) h.sessions[f.file] = { size: f.size, mtime: f.mtime, s: compact(s) };
       } catch {}
-      if (++i % 5 === 0 && progress) progress(i, todo.length);
+      if (++i % 5 === 0) progress(i, todo.length);
     }
     for (const k of Object.keys(h.sessions)) if (!present.has(k)) h.sessions[k].deleted = true;
     if (todo.length) await saveHistory();
-  } finally { scanning = false; }
+  }
 }
 
 // Requiere que el histórico esté cargado (await loadHistory())
@@ -381,6 +399,11 @@ function activate(context) {
       if (!e.affectsConfiguration('claudeMeter')) return;
       restartTimer();
       if (e.affectsConfiguration('claudeMeter.priceOverrides')) applyPricing().catch(e2 => console.error('claudeMeter', e2));
+      // Al volver a activar el guardado, se guarda lo que se ha acumulado en memoria
+      if (e.affectsConfiguration('claudeMeter.saveToDisk') && saveToDisk()) {
+        saveHistory();
+        scanBlocksBackground();
+      }
       if (live) lastSummary = live.state.summary(cfg().get('contextWindow'), claudeEnv);
       if (lastSummary) render(lastSummary);
       showBlocks(true);

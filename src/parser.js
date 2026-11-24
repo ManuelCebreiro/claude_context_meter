@@ -285,9 +285,9 @@ async function readWholeFile(file, onLine) {
   r.flush();
 }
 
-function subagentFiles(sessionFile) {
+async function subagentFiles(sessionFile) {
   const dir = path.join(path.dirname(sessionFile), path.basename(sessionFile, '.jsonl'), 'subagents');
-  try { return fs.readdirSync(dir).filter(f => f.endsWith('.jsonl')).map(f => path.join(dir, f)); }
+  try { return (await fsp.readdir(dir)).filter(f => f.endsWith('.jsonl')).map(f => path.join(dir, f)); }
   catch { return []; }
 }
 
@@ -306,29 +306,27 @@ function feedSubagentFile(state, file) {
 async function parseSessionFile(file, pricing, contextWindowSetting, env) {
   const st = new SessionState(file, pricing);
   await readWholeFile(file, (line) => st.feedLine(line));
-  for (const sf of subagentFiles(file)) await feedSubagentFile(st, sf);
+  for (const sf of await subagentFiles(file)) await feedSubagentFile(st, sf);
   return st.summary(contextWindowSetting, env);
 }
 
-function jsonlFilesIn(dir, projectDir) {
-  const out = [];
+async function jsonlFilesIn(dir, projectDir) {
   let files;
-  try { files = fs.readdirSync(dir); } catch { return out; }
-  for (const f of files) {
-    if (!f.endsWith('.jsonl')) continue;
+  try { files = await fsp.readdir(dir); } catch { return []; }
+  const out = await Promise.all(files.filter(f => f.endsWith('.jsonl')).map(async (f) => {
     const full = path.join(dir, f);
-    try { const s = fs.statSync(full); out.push({ file: full, size: s.size, mtime: s.mtimeMs, projectDir }); } catch {}
-  }
-  return out;
+    try { const s = await fsp.stat(full); return { file: full, size: s.size, mtime: s.mtimeMs, projectDir }; }
+    catch { return null; }
+  }));
+  return out.filter(Boolean);
 }
 
 // Lista todos los transcripts principales (no subagentes)
-function listSessionFiles(root = PROJECTS_DIR) {
+async function listSessionFiles(root = PROJECTS_DIR) {
   let dirs;
-  try { dirs = fs.readdirSync(root, { withFileTypes: true }); } catch { return []; }
-  const out = [];
-  for (const d of dirs) if (d.isDirectory()) out.push(...jsonlFilesIn(path.join(root, d.name), d.name));
-  return out;
+  try { dirs = await fsp.readdir(root, { withFileTypes: true }); } catch { return []; }
+  const lists = await Promise.all(dirs.filter(d => d.isDirectory()).map(d => jsonlFilesIn(path.join(root, d.name), d.name)));
+  return lists.flat();
 }
 
 // Codificación de carpeta que usa Claude Code: todo lo no alfanumérico → '-'
@@ -344,22 +342,22 @@ function normPath(p) {
 // El cwd de un transcript no cambia: se lee una vez (primeros 64 KB) y se guarda.
 // Solo se guardan resultados positivos: un archivo recién creado puede no tenerlo aún.
 const cwdCache = new Map();
-function readCwd(file) {
+async function readCwd(file) {
   const hit = cwdCache.get(file);
   if (hit) return hit;
-  let fd;
+  let fh;
   try {
-    fd = fs.openSync(file, 'r');
+    fh = await fsp.open(file, 'r');
     const buf = Buffer.alloc(65536);
-    const n = fs.readSync(fd, buf, 0, buf.length, 0);
-    for (const line of buf.subarray(0, n).toString('utf8').split('\n')) {
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    for (const line of buf.subarray(0, bytesRead).toString('utf8').split('\n')) {
       if (!line.startsWith('{')) continue;
       try {
         const e = JSON.parse(line);
         if (e.cwd) { cwdCache.set(file, e.cwd); return e.cwd; }
       } catch {}
     }
-  } catch {} finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {} }
+  } catch {} finally { if (fh) await fh.close().catch(() => {}); }
   return null;
 }
 
@@ -367,22 +365,23 @@ function readCwd(file) {
 // Plan A: solo mira las carpetas de ~/.claude/projects que corresponden a las carpetas
 // abiertas. Plan B (más caro, `fallback`): revisa los archivos más recientes de todos
 // los proyectos, para sesiones abiertas en una subcarpeta.
-function findActiveSession(workspacePaths, root = PROJECTS_DIR, { fallback = true } = {}) {
+async function findActiveSession(workspacePaths, root = PROJECTS_DIR, { fallback = true } = {}) {
   const wanted = workspacePaths.map(normPath);
   if (wanted.length === 0) {
-    const all = listSessionFiles(root).sort((a, b) => b.mtime - a.mtime);
+    const all = (await listSessionFiles(root)).sort((a, b) => b.mtime - a.mtime);
     return all.length ? all[0].file : null;
   }
   const dirs = [...new Set(workspacePaths.map(encodeProjectDir))];
-  const candidates = dirs.flatMap(d => jsonlFilesIn(path.join(root, d), d)).sort((a, b) => b.mtime - a.mtime);
+  const candidates = (await Promise.all(dirs.map(d => jsonlFilesIn(path.join(root, d), d)))).flat()
+    .sort((a, b) => b.mtime - a.mtime);
   for (const c of candidates) {
-    const cwd = readCwd(c.file);
+    const cwd = await readCwd(c.file);
     if (!cwd || wanted.includes(normPath(cwd))) return c.file;
   }
   if (!fallback) return null;
-  const recent = listSessionFiles(root).sort((a, b) => b.mtime - a.mtime).slice(0, 40);
+  const recent = (await listSessionFiles(root)).sort((a, b) => b.mtime - a.mtime).slice(0, 40);
   for (const c of recent) {
-    const cwd = readCwd(c.file);
+    const cwd = await readCwd(c.file);
     if (cwd && wanted.some(w => normPath(cwd) === w || normPath(cwd).startsWith(w + path.sep))) return c.file;
   }
   return null;
@@ -390,16 +389,18 @@ function findActiveSession(workspacePaths, root = PROJECTS_DIR, { fallback = tru
 
 // Lee (sin modificar) la configuración de Claude Code para saber si el 1M está desactivado
 // o si hay un modelo [1m] elegido. Mira variables de entorno y los settings de usuario y proyecto.
-function readClaudeEnv(workspacePaths) {
+async function readClaudeEnv(workspacePaths) {
   const files = [path.join(os.homedir(), '.claude', 'settings.json')];
   for (const w of workspacePaths || []) {
     files.push(path.join(w, '.claude', 'settings.json'), path.join(w, '.claude', 'settings.local.json'));
   }
   let disable1m = process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT === '1';
   let model1m = /\[1m\]/i.test(process.env.ANTHROPIC_MODEL || '');
-  for (const f of files) {
+  const contents = await Promise.all(files.map(f => fsp.readFile(f, 'utf8').catch(() => null)));
+  for (const text of contents) {
     let j;
-    try { j = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { continue; }
+    try { j = JSON.parse(text); } catch { continue; }
+    if (!j || typeof j !== 'object') continue;
     const env = j.env || {};
     if (String(env.CLAUDE_CODE_DISABLE_1M_CONTEXT) === '1') disable1m = true;
     if (/\[1m\]/i.test(String(j.model || '')) || /\[1m\]/i.test(String(env.ANTHROPIC_MODEL || ''))) model1m = true;

@@ -16,6 +16,8 @@ Extensión de VS Code (JavaScript puro, sin dependencias ni compilación) que mu
 
 ## Reglas importantes
 - Nunca escribir en `~/.claude/` (ni settings ni hooks). Sin red.
+- Nada síncrono en `src/` (ni `fs.*Sync`): la extensión comparte proceso con las demás y no debe bloquear VS Code. Las lecturas van por `IncrementalReader` (trozos de 1 MB) o `fs.promises`.
+- `claudeMeter.saveToDisk` (por defecto activado): si está desactivado no se escribe `history.json` ni `blocks.json`; lo existente se sigue leyendo y no se borra.
 - Contexto = `input + cache_creation + cache_read` de la última llamada del hilo principal (igual que Claude Code; sin output).
 - Ventana de contexto (`contextWindowFor` en `src/parser.js`), según la documentación de Claude Code: 1M por defecto en Fable 5+, Mythos 5+, Sonnet 5+, Haiku 5.5 y Opus 4.7+; Opus/Sonnet 4.6 solo con `[1m]`; el resto 200K; `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` fuerza 200K.
 - Precios en `PRICES` (`src/parser.js`), USD por millón: [input, output, cacheWrite5m, cacheWrite1h, cacheRead].

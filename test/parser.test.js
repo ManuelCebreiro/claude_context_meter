@@ -216,7 +216,7 @@ test('encodeProjectDir sustituye todo lo no alfanumérico por guiones', () => {
   assert.equal(P.encodeProjectDir('/home/ana/app.v2'), '-home-ana-app-v2');
 });
 
-test('findActiveSession: elige el transcript más reciente del proyecto abierto', (t) => {
+test('findActiveSession: elige el transcript más reciente del proyecto abierto', async (t) => {
   const root = tmpDir(t);
   const ws = path.join(root, 'ws', 'mi-app');
   const dir = path.join(root, P.encodeProjectDir(ws));
@@ -224,18 +224,18 @@ test('findActiveSession: elige el transcript más reciente del proyecto abierto'
   writeLines(old, [userLine('x', T0, { cwd: ws })]);
   writeLines(recent, [userLine('y', T0, { cwd: ws })]);
   fs.utimesSync(old, new Date(T0), new Date(T0));
-  assert.equal(P.findActiveSession([ws], root), recent);
+  assert.equal(await P.findActiveSession([ws], root), recent);
 });
 
-test('findActiveSession: plan B encuentra sesiones abiertas en una subcarpeta', (t) => {
+test('findActiveSession: plan B encuentra sesiones abiertas en una subcarpeta', async (t) => {
   const root = tmpDir(t);
   const ws = path.join(root, 'ws', 'mi-app');
   const sub = path.join(ws, 'packages', 'api');
   const f = path.join(root, P.encodeProjectDir(sub), 's.jsonl');
   writeLines(f, [userLine('z', T0, { cwd: sub })]);
-  assert.equal(P.findActiveSession([ws], root), f);
-  assert.equal(P.findActiveSession([path.join(root, 'otra')], root), null);
-  assert.equal(P.findActiveSession([ws], root, { fallback: false }), null, 'sin plan B no la encuentra');
+  assert.equal(await P.findActiveSession([ws], root), f);
+  assert.equal(await P.findActiveSession([path.join(root, 'otra')], root), null);
+  assert.equal(await P.findActiveSession([ws], root, { fallback: false }), null, 'sin plan B no la encuentra');
 });
 
 test('parseSessionFile incluye los archivos de subagentes', async (t) => {
@@ -248,4 +248,35 @@ test('parseSessionFile incluye los archivos de subagentes', async (t) => {
   assert.equal(s.apiCalls, 2);
   assert.equal(s.subTotals.output, 20);
   assert.equal(s.currentContext, 10);
+});
+
+test('listSessionFiles: lista los transcripts principales de cada proyecto, sin subagentes', async (t) => {
+  const root = tmpDir(t);
+  writeLines(path.join(root, 'p1', 'a.jsonl'), [userLine('a', T0)]);
+  writeLines(path.join(root, 'p2', 'b.jsonl'), [userLine('b', T0)]);
+  writeLines(path.join(root, 'p2', 'b', 'subagents', 'agent.jsonl'), [userLine('s', T0)]);
+  fs.writeFileSync(path.join(root, 'p1', 'notas.txt'), 'x');
+  const files = (await P.listSessionFiles(root)).map(f => path.relative(root, f.file)).sort();
+  assert.deepEqual(files, [path.join('p1', 'a.jsonl'), path.join('p2', 'b.jsonl')]);
+  assert.deepEqual(await P.listSessionFiles(path.join(root, 'no-existe')), []);
+});
+
+test('readClaudeEnv: lee los settings del proyecto (solo lectura)', async (t) => {
+  const ws = tmpDir(t);
+  const file = path.join(ws, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ model: 'opus[1m]', env: { CLAUDE_CODE_DISABLE_1M_CONTEXT: '1' } }));
+  const before = fs.statSync(file).mtimeMs;
+  const env = await P.readClaudeEnv([ws]);
+  assert.equal(env.disable1m, true);
+  assert.equal(env.model1m, true);
+  assert.equal(fs.statSync(file).mtimeMs, before, 'no modifica el archivo');
+});
+
+test('readClaudeEnv: un settings con JSON roto se ignora', async (t) => {
+  const ws = tmpDir(t);
+  fs.mkdirSync(path.join(ws, '.claude'));
+  fs.writeFileSync(path.join(ws, '.claude', 'settings.json'), '{ roto');
+  const env = await P.readClaudeEnv([ws]);
+  assert.equal(typeof env.disable1m, 'boolean');
 });
