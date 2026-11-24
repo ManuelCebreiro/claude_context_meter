@@ -129,15 +129,17 @@ function showBlocks(force = false) {
   const key = b ? `${b.start}|${b.tokens}|${b.freshTokens}|${Math.floor(b.minsLeft)}` : 'none';
   if (!force && key === lastBlockKey) return;
   lastBlockKey = key;
+  lastBlock = b;
   renderBlock(b);
+  updateView();
   if (panel) panel.webview.postMessage({ type: 'blocks', current: b, past: pastBlocks.slice(-30), max: personalMax() });
 }
 
 function renderBlock(b) {
   const c = cfg();
-  if (!c.get('showBlock')) { blkItem.hide(); return; }
+  if (!c.get('showBlock') || statusBarMode() !== 'all') { blkItem.hide(); return; }
   if (!b) {
-    blkItem.text = '$(clock) 5h: sin actividad';
+    blkItem.text = '$(clock) 5h: —';
     blkItem.tooltip = 'No hay llamadas de Claude Code en las últimas 5 horas: el próximo mensaje abrirá un bloque nuevo.';
     blkItem.backgroundColor = undefined;
     blkItem.show();
@@ -145,13 +147,15 @@ function renderBlock(b) {
   }
   const max = personalMax();
   const ratio = max && max.freshTokens ? b.freshTokens / max.freshTokens : 0;
-  blkItem.text = `$(clock) 5h: ${fmt(b.freshTokens)} sin caché (${fmt(b.tokens)} total)${max ? ` · ${Math.round(ratio * 100)}% de tu máx.` : ''} · ${dur(b.minsLeft)}`;
+  // Texto corto (la barra de estado suele ir llena): sin caché (total) · % de tu máximo · tiempo restante
+  blkItem.text = `$(clock) 5h ${fmt(b.freshTokens)} (${fmt(b.tokens)})${max ? ` · ${Math.round(ratio * 100)}%` : ''} · ${dur(b.minsLeft)}`;
   blkItem.backgroundColor = ratio >= 1 ? new vscode.ThemeColor('statusBarItem.errorBackground')
     : ratio >= c.get('blockWarnRatio') ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
   const md = new vscode.MarkdownString(undefined, true);
   md.supportThemeIcons = true;
   md.appendMarkdown(`**Bloque de 5 h actual** (estimado): ${hm(b.start)} → ${hm(b.end)}  \n`);
   md.appendMarkdown(`Se reinicia en **${dur(b.minsLeft)}**\n\n`);
+  md.appendMarkdown(`_En la barra: tokens sin caché leída (total) · % de tu bloque más grande · tiempo hasta el reinicio_\n\n`);
   md.appendMarkdown(`| | |\n|---|---:|\n`);
   md.appendMarkdown(`| Tokens sin caché leída | ${fmt(b.freshTokens)} |\n| Tokens procesados (total) | ${fmt(b.tokens)} |\n`);
   md.appendMarkdown(`| Leídos de caché | ${fmt(b.tokens - b.freshTokens)} |\n| Llamadas a la API | ${b.calls} |\n`);
@@ -210,8 +214,22 @@ async function scanBlocksBackground() {
 }
 
 // ── Barra de estado ─────────────────────────────────────────────────────────
+// claudeMeter.statusBar: 'all' (los tres), 'context' (solo el contexto) o 'none'
+function statusBarMode() {
+  const m = cfg().get('statusBar');
+  return m === 'context' || m === 'none' ? m : 'all';
+}
+
 function render(s) {
+  viewLive = s;
+  renderStatus(s);
+  updateView();
+}
+
+function renderStatus(s) {
   const c = cfg();
+  const mode = statusBarMode();
+  if (mode === 'none') { ctxItem.hide(); sesItem.hide(); return; }
   if (!s) {
     ctxItem.text = '$(layers) Claude: sin sesión';
     ctxItem.tooltip = 'No hay ninguna sesión de Claude Code para esta carpeta. Clic para ver el histórico.';
@@ -221,11 +239,11 @@ function render(s) {
     return;
   }
   const pct = s.contextWindow ? (s.currentContext / s.contextWindow) * 100 : 0;
-  ctxItem.text = `$(layers) ${fmt(s.currentContext)} / ${fmt(s.contextWindow)} · ${pct.toFixed(pct < 10 ? 1 : 0)}%`;
+  ctxItem.text = `$(layers) ${fmt(s.currentContext)}/${fmt(s.contextWindow)} · ${pct.toFixed(pct < 10 ? 1 : 0)}%`;
   ctxItem.backgroundColor = pct >= c.get('errorPercent') ? new vscode.ThemeColor('statusBarItem.errorBackground')
     : pct >= c.get('warningPercent') ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
 
-  let t = `$(comment-discussion) ${s.prompts} · $(pulse) ${fmt(s.totalTokens)}`;
+  let t = `$(comment-discussion) ${s.prompts} · ${fmt(s.totalTokens)}`;
   if (c.get('showCost')) t += ` · ${money(s.cost)}`;
   sesItem.text = t;
 
@@ -253,8 +271,66 @@ function render(s) {
   md.isTrusted = { enabledCommands: ['claudeMeter.openPanel'] };
   ctxItem.tooltip = md;
   sesItem.tooltip = md;
-  ctxItem.show(); sesItem.show();
+  ctxItem.show();
+  if (mode === 'all') sesItem.show(); else sesItem.hide();
 }
+
+// ── Vista compacta (debajo del chat de Claude Code) ─────────────────────────
+let view = null, viewLive = null, lastBlock = null;
+
+// Solo lo que pinta la vista (el resumen completo lleva todas las preguntas)
+function slimLive(s) {
+  if (!s) return null;
+  const lp = s.perPrompt[s.perPrompt.length - 1];
+  return {
+    project: s.project, model: shortModel(s.model),
+    currentContext: s.currentContext, contextWindow: s.contextWindow, contextWindowReason: s.contextWindowReason,
+    peakContext: s.peakContext, lastCallUsage: s.lastCallUsage,
+    prompts: s.prompts, apiCalls: s.apiCalls, totalTokens: s.totalTokens, freshTokens: P.freshOf(s.totals),
+    subTokens: P.usageTotal(s.subTotals), cost: s.cost,
+    lastPrompt: lp ? {
+      text: lp.text.replace(/\s+/g, ' ').slice(0, 300), ts: lp.ts, startCtx: lp.startCtx, endCtx: lp.endCtx,
+      calls: lp.calls, subCalls: lp.subCalls, tokens: P.usageTotal(lp.usage), cost: lp.cost,
+    } : null,
+  };
+}
+
+function updateView() {
+  if (!view || !view.visible) return;
+  const max = personalMax();
+  view.webview.postMessage({
+    type: 'state',
+    live: slimLive(viewLive),
+    block: lastBlock,
+    max: max ? { freshTokens: max.freshTokens, start: max.start } : null,
+    scanDone: blockScanDone,
+    cfg: { ...panelConfig(), showBlock: cfg().get('showBlock') },
+  });
+}
+
+function webviewHtml(webview, script, style) {
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const js = webview.asWebviewUri(vscode.Uri.joinPath(ctxRef.extensionUri, 'media', script));
+  const css = webview.asWebviewUri(vscode.Uri.joinPath(ctxRef.extensionUri, 'media', style));
+  return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+<link rel="stylesheet" href="${css}"></head><body><main id="app"></main>
+<script nonce="${nonce}" src="${js}"></script></body></html>`;
+}
+
+const viewProvider = {
+  resolveWebviewView(wv) {
+    view = wv;
+    wv.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(ctxRef.extensionUri, 'media')] };
+    wv.webview.html = webviewHtml(wv.webview, 'view.js', 'view.css');
+    wv.webview.onDidReceiveMessage((m) => {
+      if (m.type === 'ready') updateView();
+      else if (m.type === 'openPanel') openPanel();
+    });
+    wv.onDidChangeVisibility(() => updateView());
+    wv.onDidDispose(() => { if (view === wv) view = null; });
+  },
+};
 
 // ── Histórico (archivo propio, sobrevive a la limpieza de 30 días de Claude) ─
 function historyFile() { return path.join(ctxRef.globalStorageUri.fsPath, 'history.json'); }
@@ -389,6 +465,8 @@ function activate(context) {
   blkItem.command = 'claudeMeter.openPanel';
   context.subscriptions.push(ctxItem, sesItem, blkItem,
     vscode.commands.registerCommand('claudeMeter.openPanel', openPanel),
+    vscode.window.registerWebviewViewProvider('claudeMeter.view', viewProvider),
+    vscode.commands.registerCommand('claudeMeter.showView', () => vscode.commands.executeCommand('claudeMeter.view.focus')),
     vscode.commands.registerCommand('claudeMeter.refresh', () => {
       live = null; lastSummary = null; lastFallback = 0;
       tick();

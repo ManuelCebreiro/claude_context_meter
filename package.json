@@ -1,7 +1,7 @@
 {
   "name": "claude-context-meter",
   "displayName": "Claude Context Meter",
-  "description": "Contexto actual, tokens de la sesión, bloque de 5 horas e histórico de Claude Code en la barra de estado. 100% local.",
+  "description": "Contexto actual, tokens de la sesión, bloque de 5 horas e histórico de Claude Code, debajo del chat de Claude Code y en la barra de estado. 100% local.",
   "version": "0.3.0",
   "publisher": "manuelcebreiro",
   "license": "MIT",
@@ -14,8 +14,14 @@
   "contributes": {
     "commands": [
       { "command": "claudeMeter.openPanel", "title": "Claude Meter: Abrir panel de tokens" },
-      { "command": "claudeMeter.refresh", "title": "Claude Meter: Volver a detectar la sesión" }
+      { "command": "claudeMeter.refresh", "title": "Claude Meter: Volver a detectar la sesión" },
+      { "command": "claudeMeter.showView", "title": "Claude Meter: Mostrar la vista" }
     ],
+    "views": {
+      "claude-sidebar-secondary": [
+        { "type": "webview", "id": "claudeMeter.view", "name": "Claude Meter" }
+      ]
+    },
     "configuration": {
       "title": "Claude Context Meter",
       "properties": {
@@ -23,6 +29,11 @@
         "claudeMeter.contextWindow": { "type": "number", "default": 0, "description": "Ventana de contexto en tokens. 0 = automática con las reglas de Claude Code (1M por defecto en Opus 4.7+, Sonnet 5+, Haiku 5.5 y Fable; Opus/Sonnet 4.6 solo con [1m]; respeta CLAUDE_CODE_DISABLE_1M_CONTEXT)." },
         "claudeMeter.warningPercent": { "type": "number", "default": 60, "description": "% de contexto a partir del cual la barra se pone amarilla." },
         "claudeMeter.errorPercent": { "type": "number", "default": 80, "description": "% de contexto a partir del cual la barra se pone roja." },
+        "claudeMeter.statusBar": {
+          "type": "string", "default": "all", "enum": ["all", "context", "none"],
+          "enumDescriptions": ["Contexto, sesión y bloque de 5 h", "Solo el contexto", "Nada (todo está en la vista Claude Meter)"],
+          "description": "Qué mostrar en la barra de estado. La vista Claude Meter, debajo del chat de Claude Code, muestra siempre todo."
+        },
         "claudeMeter.showBlock": { "type": "boolean", "default": true, "description": "Mostrar el consumo del bloque de 5 horas actual (estimado con todo Claude Code de este ordenador)." },
         "claudeMeter.blockWarnRatio": { "type": "number", "default": 0.8, "description": "Fracción de tu bloque de 5 h más grande a partir de la cual el indicador se pone amarillo (rojo al superarlo)." },
         "claudeMeter.saveToDisk": { "type": "boolean", "default": true, "description": "Guardar el histórico de sesiones y de bloques de 5 h (history.json y blocks.json, en el almacenamiento propio de la extensión) para conservarlo cuando Claude Code borre transcripts antiguos. Desactivado, la extensión no escribe nada en disco: solo lee los transcripts y guarda lo nuevo en memoria. Los archivos que ya existan no se borran." },
