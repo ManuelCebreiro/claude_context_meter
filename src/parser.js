@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { StringDecoder } = require('string_decoder');
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
@@ -14,6 +15,7 @@ const PRICES = [
   [/sonnet-5-5/, [2, 10, 2.5, 4, 0.1]],
   [/sonnet-5/, [2, 10, 2.5, 4, 0.2]],
   [/haiku-5-5/, [0.1, 0.5, 0.125, 0.2, 0.01]],
+  [/(fable|mythos)-5-2/, [8, 40, 10, 16, 0.2]],
   [/(fable|mythos)-5/, [10, 50, 12.5, 20, 0.25]],
   [/opus/, [5, 25, 6.25, 10, 0.5]],
   [/sonnet/, [3, 15, 3.75, 6, 0.3]],
@@ -221,20 +223,21 @@ class SessionState {
 }
 
 // ── Lectura incremental (no pierde líneas a medio escribir) ─────────────────
+// StringDecoder guarda los bytes de un carácter UTF-8 cortado entre dos lecturas.
 class IncrementalReader {
-  constructor(file, onLine) { this.file = file; this.onLine = onLine; this.offset = 0; this.rest = ''; }
+  constructor(file, onLine) { this.file = file; this.onLine = onLine; this.offset = 0; this.rest = ''; this.decoder = new StringDecoder('utf8'); }
   poll() {
     let fd;
     try {
       const st = fs.statSync(this.file);
-      if (st.size < this.offset) { this.offset = 0; this.rest = ''; return 'reset'; }
+      if (st.size < this.offset) { this.offset = 0; this.rest = ''; this.decoder = new StringDecoder('utf8'); return 'reset'; }
       if (st.size === this.offset) return false;
       fd = fs.openSync(this.file, 'r');
       const len = st.size - this.offset;
       const buf = Buffer.alloc(len);
       const n = fs.readSync(fd, buf, 0, len, this.offset);
       this.offset += n;
-      const text = this.rest + buf.subarray(0, n).toString('utf8');
+      const text = this.rest + this.decoder.write(buf.subarray(0, n));
       const lines = text.split('\n');
       this.rest = lines.pop(); // la última puede estar incompleta
       for (const l of lines) this.onLine(l.trim());

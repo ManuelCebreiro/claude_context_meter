@@ -38,16 +38,27 @@ function callFromLine(line) {
   return { id: e.message.id || e.requestId || e.uuid, ts, model: e.message.model, usage: P.readUsage(e.message.usage) };
 }
 
-function buildBlocks(calls, pricing) {
+function newBlock(start, firstTs) {
+  return { start, end: start + H5, tokens: 0, cost: 0, calls: 0, first: firstTs, last: firstTs, models: {} };
+}
+
+// `anchor` (opcional): inicio de un bloque ya conocido por el escaneo completo.
+// Las llamadas anteriores se ignoran y las que caen dentro de [anchor, anchor + 5 h)
+// van a ese bloque. Sin ancla, la cadena de bloques empezaría en la primera llamada
+// que vemos, y con uso continuo los bloques quedarían desplazados respecto a los reales.
+function buildBlocks(calls, pricing, anchor) {
   const sorted = [...calls].sort((a, b) => a.ts - b.ts);
   const blocks = [];
-  let cur = null;
+  let cur = null, curPushed = false;
+  if (anchor != null) cur = newBlock(anchor, null);
   for (const c of sorted) {
-    if (!cur || c.ts >= cur.start + H5) {
+    if (anchor != null && c.ts < anchor) continue;
+    if (!cur || c.ts >= cur.end) {
       const start = new Date(c.ts); start.setMinutes(0, 0, 0);
-      cur = { start: start.getTime(), end: start.getTime() + H5, tokens: 0, cost: 0, calls: 0, first: c.ts, last: c.ts, models: {} };
-      blocks.push(cur);
+      cur = newBlock(start.getTime(), c.ts);
+      curPushed = false;
     }
+    if (!curPushed) { if (cur.first == null) cur.first = c.ts; blocks.push(cur); curPushed = true; }
     const t = P.usageTotal(c.usage);
     cur.tokens += t;
     cur.cost += P.callCost(c.model, c.usage, pricing);
@@ -65,6 +76,7 @@ class LiveBlocks {
     this.readers = new Map();   // file -> IncrementalReader
     this.calls = new Map();     // id -> call
     this.lastScan = 0;
+    this.anchor = null;         // inicio del último bloque según el escaneo completo
   }
   poll(now = Date.now(), force = false) {
     if (!force && now - this.lastScan < 10000) return false;
@@ -84,7 +96,7 @@ class LiveBlocks {
     return changed;
   }
   current(now = Date.now()) {
-    const blocks = buildBlocks(this.calls.values(), this.pricing);
+    const blocks = buildBlocks(this.calls.values(), this.pricing, this.anchor);
     const b = blocks[blocks.length - 1];
     if (!b || now >= b.end) return null;
     // Ritmo: tokens de los últimos 30 min

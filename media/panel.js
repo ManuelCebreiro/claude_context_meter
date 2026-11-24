@@ -4,6 +4,7 @@
   const app = document.getElementById('app');
   const statusEl = document.getElementById('status');
   let tab = 'live', blocks = null, live = null, hist = [], detail = null, showCost = true, project = '';
+  let warnPct = 60, errPct = 80, blockWarn = 0.8; // se sobrescriben con la configuración
 
   // ── helpers ──
   function h(tag, attrs, kids) {
@@ -42,7 +43,7 @@
     return h('div', { class: 'card' }, [h('div', { class: 'lbl' }, label), h('div', { class: 'val' }, value), sub ? h('div', { class: 'sub' }, sub) : null, extra || null]);
   }
   function meter(pct) {
-    const cls = pct >= 80 ? 'bad' : pct >= 60 ? 'warn' : '';
+    const cls = pct >= errPct ? 'bad' : pct >= warnPct ? 'warn' : '';
     return h('div', { class: 'meter' }, h('div', { class: 'fill ' + cls, style: 'width:' + Math.min(100, pct).toFixed(1) + '%' }));
   }
 
@@ -102,7 +103,7 @@
     vals.forEach((v, i) => {
       const bh = Math.max(1, v / max * H);
       const pct = win ? v / win * 100 : 0;
-      const r = s('rect', { x: pad + i * bw + 1, y: H - bh, width: Math.max(1, bw - 2), height: bh, class: 'bar' + (pct >= 80 ? ' bad' : pct >= 60 ? ' warn' : '') + (pp[i].compactBefore ? ' cmp' : '') });
+      const r = s('rect', { x: pad + i * bw + 1, y: H - bh, width: Math.max(1, bw - 2), height: bh, class: 'bar' + (pct >= errPct ? ' bad' : pct >= warnPct ? ' warn' : '') + (pp[i].compactBefore ? ' cmp' : '') });
       r.append(s('title', {}, `#${i + 1} · ${fmt(v)} tokens (${pct.toFixed(1)}%)\n${pp[i].text.slice(0, 100)}`));
       svg.append(r);
     });
@@ -181,7 +182,7 @@
     const mk = (b, isCur) => h('tr', { class: isCur ? 'cur' : '' }, [
       h('td', {}, [isCur ? h('span', { class: 'tag' }, 'ahora') : null, t(b.start)]),
       h('td', { class: 'num' }, fmt(b.tokens)),
-      h('td', { class: 'barcell' }, h('div', { class: 'meter' }, h('div', { class: 'fill' + (max && b.tokens >= max ? ' bad' : max && b.tokens >= max * 0.8 ? ' warn' : ''), style: 'width:' + (max ? Math.min(100, b.tokens / max * 100) : 0).toFixed(1) + '%' }))),
+      h('td', { class: 'barcell' }, h('div', { class: 'meter' }, h('div', { class: 'fill' + (max && b.tokens >= max ? ' bad' : max && b.tokens >= max * blockWarn ? ' warn' : ''), style: 'width:' + (max ? Math.min(100, b.tokens / max * 100) : 0).toFixed(1) + '%' }))),
       h('td', { class: 'num' }, String(b.calls)),
       showCost ? h('td', { class: 'num' }, money(b.cost)) : null,
     ]);
@@ -209,7 +210,13 @@
 
   window.addEventListener('message', (ev) => {
     const m = ev.data;
-    if (m.type === 'config') showCost = m.showCost;
+    if (m.type === 'config') {
+      showCost = m.showCost;
+      if (typeof m.warningPercent === 'number') warnPct = m.warningPercent;
+      if (typeof m.errorPercent === 'number') errPct = m.errorPercent;
+      if (typeof m.blockWarnRatio === 'number') blockWarn = m.blockWarnRatio;
+      render();
+    }
     else if (m.type === 'live') { live = m.data; if (tab === 'live') render(); }
     else if (m.type === 'history') { hist = m.data; statusEl.textContent = m.scanning ? 'Leyendo sesiones…' : ''; if (tab === 'hist') render(); }
     else if (m.type === 'progress') statusEl.textContent = 'Leyendo sesiones… ' + m.i + '/' + m.n;

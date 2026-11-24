@@ -17,6 +17,11 @@ let claudeEnv = { disable1m: false, model1m: false };
 let lastEnvRead = 0;
 
 const cfg = () => vscode.workspace.getConfiguration('claudeMeter');
+const pricing = () => cfg().get('priceOverrides') || null;
+const panelConfig = () => {
+  const c = cfg();
+  return { type: 'config', showCost: c.get('showCost'), warningPercent: c.get('warningPercent'), errorPercent: c.get('errorPercent'), blockWarnRatio: c.get('blockWarnRatio') };
+};
 
 // ── Formato ──────────────────────────────────────────────────────────────────
 function fmt(n) {
@@ -34,7 +39,7 @@ function workspacePaths() {
 }
 
 function attachLive(file) {
-  const state = new P.SessionState(file, cfg().get('priceOverrides') || null);
+  const state = new P.SessionState(file, pricing());
   live = { file, state, reader: new P.IncrementalReader(file, l => state.feedLine(l)), subReaders: new Map() };
 }
 
@@ -90,7 +95,7 @@ const hm = (ms) => new Date(ms).toLocaleTimeString('es-ES', { hour: '2-digit', m
 function dur(mins) { const h = Math.floor(mins / 60), m = Math.round(mins % 60); return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`; }
 
 function tickBlocks(now) {
-  if (!liveBlocks) liveBlocks = new B.LiveBlocks(cfg().get('priceOverrides') || null);
+  if (!liveBlocks) liveBlocks = new B.LiveBlocks(pricing());
   const changed = liveBlocks.poll(now);
   const b = liveBlocks.current(now);
   const key = b ? `${b.start}|${b.tokens}|${Math.floor(b.minsLeft)}` : 'none';
@@ -134,26 +139,40 @@ function renderBlock(b) {
   blkItem.show();
 }
 
+let blockScanRunning = false, blockScanAgain = false;
 async function scanBlocksBackground() {
+  if (blockScanRunning) { blockScanAgain = true; return; }
+  blockScanRunning = true;
   try {
     const since = Date.now() - 90 * 24 * 3600 * 1000;
-    const all = await B.scanAllBlocks(cfg().get('priceOverrides') || null, since);
+    const all = await B.scanAllBlocks(pricing(), since);
     // fusionar con los guardados (sobreviven a la limpieza de transcripts)
     const file = path.join(ctxRef.globalStorageUri.fsPath, 'blocks.json');
     let saved = [];
     try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+    const now = Date.now();
     const byStart = new Map(saved.map(b => [b.start, b]));
-    for (const b of all) if (b.end <= Date.now()) {
+    for (const b of all) if (b.end <= now) {
       const prev = byStart.get(b.start);
+      // >= : con los mismos tokens se queda el recién calculado (precios actuales)
       if (!prev || b.tokens >= prev.tokens) byStart.set(b.start, b);
     }
     pastBlocks = [...byStart.values()].sort((a, b) => a.start - b.start);
+    // Ancla para el bloque en vivo: el inicio del bloque más reciente conocido
+    let anchor = null;
+    for (const b of all.concat(pastBlocks)) if (b.start <= now && (anchor == null || b.start > anchor)) anchor = b.start;
+    if (!liveBlocks) liveBlocks = new B.LiveBlocks(pricing());
+    liveBlocks.anchor = anchor;
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(pastBlocks));
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(pastBlocks));
+    fs.renameSync(tmp, file);
   } catch (e) { console.error('claudeMeter: escaneo de bloques', e); }
+  finally { blockScanRunning = false; }
   blockScanDone = true;
   lastBlockKey = '';
   tickBlocks(Date.now());
+  if (blockScanAgain) { blockScanAgain = false; scanBlocksBackground(); }
 }
 
 // ── Barra de estado ─────────────────────────────────────────────────────────
@@ -233,13 +252,13 @@ async function scanHistory(progress) {
     const h = loadHistory();
     const files = P.listSessionFiles();
     const present = new Set(files.map(f => f.file));
-    const pricing = cfg().get('priceOverrides') || null;
+    const prices = pricing();
     const cw = cfg().get('contextWindow');
     const todo = files.filter(f => { const o = h.sessions[f.file]; return !o || o.size !== f.size || o.mtime !== f.mtime; });
     let i = 0;
     for (const f of todo) {
       try {
-        const s = P.parseSessionFile(f.file, pricing, cw, claudeEnv);
+        const s = P.parseSessionFile(f.file, prices, cw, claudeEnv);
         if (s.apiCalls > 0 || s.prompts > 0) h.sessions[f.file] = { size: f.size, mtime: f.mtime, s: compact(s) };
       } catch {}
       if (++i % 15 === 0) {
@@ -281,7 +300,7 @@ function openPanel() {
   panel.onDidDispose(() => { panel = undefined; });
   panel.webview.onDidReceiveMessage(async (m) => {
     if (m.type === 'ready' || m.type === 'refresh') {
-      panel.webview.postMessage({ type: 'config', showCost: cfg().get('showCost') });
+      panel.webview.postMessage(panelConfig());
       if (lastSummary) panel.webview.postMessage({ type: 'live', data: lastSummary });
       lastBlockKey = '';
       tickBlocks(Date.now());
@@ -318,7 +337,15 @@ function activate(context) {
     vscode.workspace.onDidChangeConfiguration(e => {
       if (!e.affectsConfiguration('claudeMeter')) return;
       restartTimer();
-      if (live) { lastSummary = live.state.summary(cfg().get('contextWindow'), claudeEnv); render(lastSummary); }
+      if (e.affectsConfiguration('claudeMeter.priceOverrides')) applyPricing();
+      if (live) lastSummary = live.state.summary(cfg().get('contextWindow'), claudeEnv);
+      if (lastSummary) render(lastSummary);
+      lastBlockKey = '';
+      tickBlocks(Date.now());
+      if (panel) {
+        panel.webview.postMessage(panelConfig());
+        if (lastSummary) panel.webview.postMessage({ type: 'live', data: lastSummary });
+      }
     }),
     { dispose: () => clearInterval(timer) },
   );
@@ -330,6 +357,21 @@ function activate(context) {
   // re-escanear el histórico de bloques cada hora (para cerrar bloques terminados)
   const hourly = setInterval(() => scanBlocksBackground(), 3600 * 1000);
   context.subscriptions.push({ dispose: () => clearInterval(hourly) });
+}
+
+// Aplica priceOverrides sin recargar: sesión en vivo, bloque en vivo, histórico y bloques guardados
+function applyPricing() {
+  const p = pricing();
+  if (live) live.state.pricing = p;
+  if (liveBlocks) liveBlocks.pricing = p;
+  // Las sesiones cuyo transcript sigue existiendo se vuelven a leer en el próximo escaneo
+  // (las borradas por Claude Code conservan el coste con el que se guardaron).
+  const h = loadHistory();
+  for (const o of Object.values(h.sessions)) if (!o.deleted) o.size = -1;
+  scanBlocksBackground();
+  scanHistory().then(() => {
+    if (panel) panel.webview.postMessage({ type: 'history', data: historyPayload(), scanning: false });
+  }).catch(() => {});
 }
 
 function restartTimer() {
