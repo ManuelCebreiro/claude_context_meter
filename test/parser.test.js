@@ -323,3 +323,14 @@ test('readOfficialUsage: lee el archivo, reutiliza el resultado si no cambia y n
   assert.equal(fs.statSync(f).mtimeMs, before);
   assert.equal(await P.readOfficialUsage(f + '.no-existe'), null);
 });
+
+test('SessionState: firstCallUsage es la primera llamada del hilo principal (la parte fija que llega de caché)', () => {
+  const s = feed([
+    userLine('hola', T0),
+    assistantLine('sub', T0 + 500, { input: 9, cacheRead: 999 }, { isSidechain: true }),
+    assistantLine('a', T0 + 1000, { cw: 40_568, cacheRead: 24_891 }),
+    assistantLine('b', T0 + 2000, { cw: 1_214, cacheRead: 65_459 }),
+  ]).summary();
+  assert.equal(s.firstCallUsage.cacheRead, 24_891);
+  assert.equal(s.lastCallUsage.cacheRead, 65_459);
+});

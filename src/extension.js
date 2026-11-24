@@ -338,6 +338,8 @@ function slimLive(s) {
   const lp = s.perPrompt[s.perPrompt.length - 1];
   return {
     project: s.project, model: shortModel(s.model),
+    firstTs: s.firstTs, lastTs: s.lastTs, title: String(s.title || '').replace(/\s+/g, ' ').slice(0, 200),
+    firstCallUsage: s.firstCallUsage,
     currentContext: s.currentContext, contextWindow: s.contextWindow, contextWindowReason: s.contextWindowReason,
     peakContext: s.peakContext, lastCallUsage: s.lastCallUsage,
     prompts: s.prompts, apiCalls: s.apiCalls, totalTokens: s.totalTokens, freshTokens: P.freshOf(s.totals),

@@ -170,7 +170,7 @@ class SessionState {
     const totals = emptyUsage();
     const subTotals = emptyUsage();
     const byModel = {};
-    let cost = 0, peak = 0, lastCtx = 0, lastCall = null, apiCalls = 0;
+    let cost = 0, peak = 0, lastCtx = 0, lastCall = null, firstCall = null, apiCalls = 0;
     const perPrompt = this.prompts.map(p => ({
       text: p.text, ts: p.ts, compactBefore: p.compactBefore,
       startCtx: null, endCtx: 0, usage: emptyUsage(), cost: 0, calls: 0, subCalls: 0,
@@ -197,7 +197,7 @@ class SessionState {
       if (c.sidechain) { addUsage(subTotals, c.usage); if (pp) pp.subCalls++; continue; }
       const ctx = contextOf(c.usage);
       if (ctx > peak) peak = ctx;
-      lastCtx = ctx; lastCall = c;
+      lastCtx = ctx; lastCall = c; if (!firstCall) firstCall = c;
       if (pp) { pp.calls++; if (pp.startCtx === null) pp.startCtx = ctx; pp.endCtx = ctx; }
     }
     const model = this.lastModel || (lastCall && lastCall.model) || null;
@@ -217,6 +217,7 @@ class SessionState {
       })(),
       currentContext: lastCtx, // igual que Claude Code: entrada + caché leída + caché escrita (sin salida)
       lastCallUsage: lastCall ? lastCall.usage : emptyUsage(),
+      firstCallUsage: firstCall ? firstCall.usage : emptyUsage(), // la parte fija (instrucciones, herramientas) suele llegar ya en caché
       peakContext: peak,
       totals, subTotals, byModel, cost,
       totalTokens: usageTotal(totals),

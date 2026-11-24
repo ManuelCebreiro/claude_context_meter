@@ -122,6 +122,11 @@
     const total = s.totalTokens || 1;
     const seg = (value, cls, tip) => value > 0 ? h('i', { class: 'seg ' + cls, title: tip, style: 'width:' + (value / total * 100).toFixed(2) + '%' }) : null;
     const rereadPct = pctOf(t.cacheRead, s.totalTokens);
+    const fixed = s.firstCallUsage ? s.firstCallUsage.cacheRead : 0;
+    const cacheTip = `En cada llamada, Claude Code reenvía todo el contexto: sus instrucciones, las herramientas, tus CLAUDE.md y la conversación entera. `
+      + `Lo que ya estaba en caché se lee de ahí, que es más rápido y cuesta un 10 % de la entrada normal. `
+      + (fixed > 0 ? `Pasa incluso en un chat nuevo: en su primera llamada ya se leyeron ${fmt(fixed)} tokens de caché (las instrucciones y herramientas de Claude Code, que tus otros chats habían dejado en caché). ` : '')
+      + `Por eso, cuantas más llamadas hace un chat, más pesa la caché leída en el total.`;
     return h('section', {}, [
       h('h4', {}, 'Sesión'),
       h('div', { class: 'stack', role: 'img', 'aria-label': 'Composición de los tokens procesados' }, [
@@ -130,8 +135,8 @@
         seg(t.input, 'c-input', `Entrada sin caché: ${fmt(t.input)}.`),
         seg(t.output, 'c-output', `Salida de Claude: ${fmt(t.output)}.`),
       ]),
-      h('div', { class: 'muted small', title: 'Por qué los tokens procesados son tantos más que el contexto.' },
-        `${pctTxt(rereadPct)} de lo procesado son relecturas de caché`),
+      h('div', { class: 'muted small tip', title: cacheTip },
+        `${pctTxt(rereadPct)} de lo procesado se leyó de caché (contexto reenviado en cada llamada)`),
       rows([
         ['Preguntas', String(s.prompts), 'Mensajes que has escrito tú en esta sesión (sin contar los resultados de herramientas).'],
         ['Llamadas a la API', String(s.apiCalls), 'Veces que Claude Code ha llamado al modelo. Una pregunta suele generar varias: una por cada paso o herramienta.'],
@@ -278,6 +283,11 @@
         h('span', { class: 'proj', title: 'Proyecto de la sesión de Claude Code que se está midiendo.' }, s.project),
         h('span', { class: 'model muted', title: 'Modelo de la última respuesta.' }, s.model),
       ]));
+      // Qué chat se está midiendo: un chat nuevo no aparece hasta su primer mensaje
+      const when = s.firstTs ? day(Date.parse(s.firstTs)) + ' ' + hm(Date.parse(s.firstTs)) : '';
+      kids.push(h('div', { class: 'chat muted small', title: `Se mide el chat más reciente de esta carpeta: «${s.title}». `
+        + 'Un chat nuevo aparece aquí en cuanto envías su primer mensaje; hasta entonces Claude Code no crea su archivo y se sigue viendo el anterior.' },
+        `Chat del ${when} · ${s.prompts} ${s.prompts === 1 ? 'pregunta' : 'preguntas'}`));
       kids.push(contextSection(s, st.cfg), lastCallSection(s), sessionSection(s, st.cfg), promptSection(s.lastPrompt, st.cfg));
     } else {
       kids.push(h('div', { class: 'empty' }, 'No hay ninguna sesión de Claude Code en esta carpeta todavía. En cuanto escribas a Claude aparecerá aquí.'));

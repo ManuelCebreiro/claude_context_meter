@@ -11,6 +11,7 @@ h4 .right { text-transform: none; letter-spacing: 0; font-weight: 400; }
 .head { padding: 4px 0 6px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .head .proj { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .head .model { flex: none; }
+.chat { margin: -4px 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .big { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .big .of { font-size: 12px; font-weight: 400; color: var(--vscode-descriptionForeground); }
@@ -41,11 +42,11 @@ button[data-tip] { cursor: pointer; }
 .small { font-size: 11px; }
 
 /* Esquema de cuadraditos: 100 casillas, cada una el 1 % */
-.waffle { display: grid; grid-template-columns: repeat(50, 6px); gap: 2px; margin: 6px 0 4px; width: max-content; }
+.waffle { display: grid; grid-template-columns: repeat(50, 4px); gap: 1px; margin: 5px 0 4px; width: max-content; }
 /* Panel estrecho: filas de 25 (cada fila = 25 %) */
-@container (max-width: 410px) { .waffle { grid-template-columns: repeat(25, 6px); } }
-.sq { display: block; width: 6px; height: 6px; border-radius: 1px; background: var(--vscode-editorWidget-border, rgba(128,128,128,.25)); opacity: .45; }
-.legend .sq { display: inline-block; width: 8px; height: 8px; margin-right: 4px; vertical-align: -1px; }
+@container (max-width: 260px) { .waffle { grid-template-columns: repeat(25, 4px); } }
+.sq { display: block; width: 4px; height: 4px; border-radius: 1px; background: var(--vscode-editorWidget-border, rgba(128,128,128,.25)); opacity: .45; }
+.legend .sq { display: inline-block; width: 7px; height: 7px; margin-right: 4px; vertical-align: -1px; }
 .sq.free { opacity: .25; }
 .sq.c-read { background: var(--vscode-charts-blue, #3794ff); opacity: 1; }
 .sq.c-write { background: var(--vscode-charts-purple, #b180d7); opacity: 1; }
