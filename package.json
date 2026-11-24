@@ -1,0 +1,32 @@
+{
+  "name": "claude-context-meter",
+  "displayName": "Claude Context Meter",
+  "description": "Contexto actual, tokens de la sesión, bloque de 5 horas e histórico de Claude Code en la barra de estado. 100% local.",
+  "version": "0.3.0",
+  "publisher": "manuelcebreiro",
+  "license": "MIT",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other", "Visualization"],
+  "keywords": ["claude", "claude-code", "tokens", "context", "usage"],
+  "main": "./src/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "claudeMeter.openPanel", "title": "Claude Meter: Abrir panel de tokens" },
+      { "command": "claudeMeter.refresh", "title": "Claude Meter: Volver a detectar la sesión" }
+    ],
+    "configuration": {
+      "title": "Claude Context Meter",
+      "properties": {
+        "claudeMeter.showCost": { "type": "boolean", "default": true, "description": "Mostrar el coste equivalente de la API (aproximado; con Pro/Max no es lo que pagas)." },
+        "claudeMeter.contextWindow": { "type": "number", "default": 0, "description": "Ventana de contexto en tokens. 0 = automática con las reglas de Claude Code (1M por defecto en Opus 4.7+, Sonnet 5+, Haiku 5.5 y Fable; Opus/Sonnet 4.6 solo con [1m]; respeta CLAUDE_CODE_DISABLE_1M_CONTEXT)." },
+        "claudeMeter.warningPercent": { "type": "number", "default": 60, "description": "% de contexto a partir del cual la barra se pone amarilla." },
+        "claudeMeter.errorPercent": { "type": "number", "default": 80, "description": "% de contexto a partir del cual la barra se pone roja." },
+        "claudeMeter.showBlock": { "type": "boolean", "default": true, "description": "Mostrar el consumo del bloque de 5 horas actual (estimado con todo Claude Code de este ordenador)." },
+        "claudeMeter.blockWarnRatio": { "type": "number", "default": 0.8, "description": "Fracción de tu bloque de 5 h más grande a partir de la cual el indicador se pone amarillo (rojo al superarlo)." },
+        "claudeMeter.pollMs": { "type": "number", "default": 1500, "description": "Cada cuántos milisegundos se relee el transcript activo." },
+        "claudeMeter.priceOverrides": { "type": "object", "default": {}, "description": "Precios propios por modelo (USD por millón): { \"opus-5-5\": [input, output, cacheWrite5m, cacheWrite1h, cacheRead] }." }
+      }
+    }
+  }
+}
