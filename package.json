@@ -9,6 +9,7 @@
   "categories": ["Other", "Visualization"],
   "keywords": ["claude", "claude-code", "tokens", "context", "usage"],
   "main": "./src/extension.js",
+  "scripts": { "test": "node --test \"test/*.test.js\"" },
   "activationEvents": ["onStartupFinished"],
   "contributes": {
     "commands": [

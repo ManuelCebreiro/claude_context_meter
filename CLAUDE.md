@@ -21,6 +21,7 @@ Extensión de VS Code (JavaScript puro, sin dependencias ni compilación) que mu
 - El bloque de 5 h es una estimación local; no es el % oficial del plan.
 
 ## Probar y empaquetar
+- Tests: `npm test` (node:test, sin dependencias; usan carpetas temporales, nunca `~/.claude`).
 - F5 → abre una ventana "Extension Development Host" con la extensión cargada.
 - Empaquetar: `npx @vscode/vsce package --allow-missing-repository --no-dependencies` → genera el `.vsix`.
 - Instalar el `.vsix`: `code --install-extension claude-context-meter-<versión>.vsix`.

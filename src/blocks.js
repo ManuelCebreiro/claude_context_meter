@@ -72,8 +72,9 @@ function buildBlocks(calls, pricing, anchor) {
 
 // Mantiene en memoria las llamadas de las últimas horas, leyendo solo lo nuevo de cada archivo
 class LiveBlocks {
-  constructor(pricing) {
+  constructor(pricing, root = P.PROJECTS_DIR) {
     this.pricing = pricing;
+    this.root = root;
     this.readers = new Map();   // file -> IncrementalReader
     this.calls = new Map();     // id -> call
     this.lastScan = 0;
@@ -83,7 +84,7 @@ class LiveBlocks {
     if (!force && now - this.lastScan < 10000) return false;
     this.lastScan = now;
     let changed = false;
-    for (const f of allTranscripts(P.PROJECTS_DIR, now - H5 * 2)) {
+    for (const f of allTranscripts(this.root, now - H5 * 2)) {
       if (!this.readers.has(f.file)) {
         this.readers.set(f.file, new P.IncrementalReader(f.file, (line) => {
           const c = callFromLine(line);
@@ -117,9 +118,9 @@ class LiveBlocks {
 }
 
 // Escaneo completo (en segundo plano) para el histórico de bloques y tu máximo
-async function scanAllBlocks(pricing, sinceMs) {
+async function scanAllBlocks(pricing, sinceMs, root = P.PROJECTS_DIR) {
   const calls = new Map();
-  const files = allTranscripts(P.PROJECTS_DIR, sinceMs || 0);
+  const files = allTranscripts(root, sinceMs || 0);
   let i = 0;
   for (const f of files) {
     let text;
@@ -133,4 +134,4 @@ async function scanAllBlocks(pricing, sinceMs) {
   return buildBlocks(calls.values(), pricing);
 }
 
-module.exports = { LiveBlocks, scanAllBlocks, buildBlocks, H5 };
+module.exports = { LiveBlocks, scanAllBlocks, buildBlocks, callFromLine, H5 };
