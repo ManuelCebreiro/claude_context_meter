@@ -32,6 +32,16 @@ function fmt(n) {
 const money = (x) => '$' + (x >= 100 ? x.toFixed(0) : x >= 1 ? x.toFixed(2) : x.toFixed(3));
 const shortModel = (m) => (m || '?').replace(/^claude-/, '').replace(/-\d{8}$/, '');
 
+// ── Idioma ──────────────────────────────────────────────────────────────────
+// Los textos son claves en inglés: vscode.l10n.t las traduce con l10n/bundle.l10n.<idioma>.json.
+// Las webviews reciben el mismo diccionario (vscode.l10n.bundle) y el idioma de VS Code.
+const t = vscode.l10n.t;
+const locale = () => vscode.env.language || 'en';
+// Textos que pone parser.js (sin acceso a vscode): se traducen al mostrarlos
+const PLACEHOLDERS = new Set(['(unknown)', '(no prompts)', '[image]']);
+const tp = (x) => PLACEHOLDERS.has(x) ? t(x) : x;
+const num = (n) => Math.round(n || 0).toLocaleString(locale());
+
 // ── Sesión en vivo ──────────────────────────────────────────────────────────
 function workspacePaths() {
   return (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath);
@@ -119,7 +129,7 @@ function personalMax() {
   return max;
 }
 
-const hm = (ms) => new Date(ms).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+const hm = (ms) => new Date(ms).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' });
 function dur(mins) { const h = Math.floor(mins / 60), m = Math.round(mins % 60); return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`; }
 
 function getLiveBlocks() {
@@ -168,9 +178,9 @@ function officialState(now = Date.now()) {
 
 const ago = (ms) => {
   const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
-  return m < 1 ? 'hace un momento' : m < 60 ? `hace ${m} min` : `hace ${dur(m)}`;
+  return m < 1 ? t('just now') : t('{0} ago', m < 60 ? `${m} min` : dur(m));
 };
-const dayTime = (ms) => new Date(ms).toLocaleString('es-ES', { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+const dayTime = (ms) => new Date(ms).toLocaleString(locale(), { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 function renderBlock(b) {
   const c = cfg();
@@ -188,35 +198,37 @@ function renderBlock(b) {
     blkItem.text = `$(clock) 5h ${pct}% · ${dur(mins)}`;
     blkItem.backgroundColor = pct >= 95 ? new vscode.ThemeColor('statusBarItem.errorBackground')
       : pct >= c.get('blockWarnRatio') * 100 ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
-    md.appendMarkdown(`**Límite de 5 h: ${pct}% usado** (dato oficial)  \n`);
-    md.appendMarkdown(`Se reinicia a las **${hm(off.five.resetsAt)}** (en ${dur(mins)})  \n`);
-    if (off.week) md.appendMarkdown(`Límite semanal: **${off.week.pct}%** · se reinicia ${dayTime(off.week.resetsAt)}  \n`);
-    if (off.fetchedAt) md.appendMarkdown(`_Dato de Claude Code de ${ago(off.fetchedAt)}; se actualiza cuando Claude Code lo consulta (por ejemplo con /usage)._\n\n`);
+    md.appendMarkdown(t('**5-hour limit: {0}% used** (official data)', pct) + '  \n');
+    md.appendMarkdown(t('Resets at **{0}** (in {1})', hm(off.five.resetsAt), dur(mins)) + '  \n');
+    if (off.week) md.appendMarkdown(t('Weekly limit: **{0}%** · resets {1}', off.week.pct, dayTime(off.week.resetsAt)) + '  \n');
+    if (off.fetchedAt) md.appendMarkdown('_' + t('Claude Code data from {0}; it updates when Claude Code checks it (for example with /usage).', ago(off.fetchedAt)) + '_\n\n');
   } else if (b) {
     const ratio = max && max.freshTokens ? b.freshTokens / max.freshTokens : 0;
     blkItem.text = `$(clock) 5h ${fmt(b.freshTokens)} (${fmt(b.tokens)})${max ? ` · ${Math.round(ratio * 100)}%` : ''} · ${dur(b.minsLeft)}`;
     blkItem.backgroundColor = ratio >= 1 ? new vscode.ThemeColor('statusBarItem.errorBackground')
       : ratio >= c.get('blockWarnRatio') ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
-    md.appendMarkdown(`**Bloque de 5 h** ${b.alignedToOfficial ? '' : '(estimado) '}: ${hm(b.start)} → ${hm(b.end)}, se reinicia en **${dur(b.minsLeft)}**  \n`);
-    if (off && off.expiredAt) md.appendMarkdown(`_La ventana oficial se reinició a las ${hm(off.expiredAt)}; el nuevo % aparecerá cuando Claude Code lo vuelva a consultar (por ejemplo con /usage)._\n\n`);
-    else md.appendMarkdown(`_En la barra: tokens sin caché leída (total) · % de tu bloque más grande · tiempo hasta el reinicio. Sin dato oficial: Claude Code aún no ha guardado tu uso del plan._\n\n`);
+    md.appendMarkdown((b.alignedToOfficial
+      ? t('**5-hour block**: {0} → {1}, resets in **{2}**', hm(b.start), hm(b.end), dur(b.minsLeft))
+      : t('**5-hour block** (estimated): {0} → {1}, resets in **{2}**', hm(b.start), hm(b.end), dur(b.minsLeft))) + '  \n');
+    if (off && off.expiredAt) md.appendMarkdown('_' + t('The official window reset at {0}; the new % will appear when Claude Code checks it again (for example with /usage).', hm(off.expiredAt)) + '_\n\n');
+    else md.appendMarkdown('_' + t('In the bar: tokens without cache reads (total) · % of your largest block · time until reset. No official data: Claude Code has not saved your plan usage yet.') + '_\n\n');
   } else {
     blkItem.text = '$(clock) 5h: —';
     blkItem.backgroundColor = undefined;
     md.appendMarkdown(off && off.expiredAt
-      ? `La ventana de 5 h se reinició a las ${hm(off.expiredAt)}. La siguiente empieza con tu próximo mensaje (aquí, en claude.ai o en Cowork).\n\n`
-      : 'No hay llamadas de Claude Code en las últimas 5 horas: el próximo mensaje abrirá un bloque nuevo.\n\n');
+      ? t('The 5-hour window reset at {0}. The next one starts with your next message (here, on claude.ai or in Cowork).', hm(off.expiredAt)) + '\n\n'
+      : t('No Claude Code calls in the last 5 hours: your next message will start a new block.') + '\n\n');
   }
 
   if (b) {
-    md.appendMarkdown(`| Este ordenador, en esta ventana | |\n|---|---:|\n`);
-    md.appendMarkdown(`| Tokens sin caché leída | ${fmt(b.freshTokens)} |\n| Tokens procesados (total) | ${fmt(b.tokens)} |\n| Llamadas a la API | ${b.calls} |\n`);
-    if (c.get('showCost')) md.appendMarkdown(`| Coste equiv. API | ${money(b.cost)} |\n`);
-    md.appendMarkdown(`| Ritmo sin caché (30 min) | ${fmt(b.perMinFresh)}/min |\n`);
-    if (max) md.appendMarkdown(`| Tu bloque más grande | ${fmt(max.freshTokens)} sin caché (${new Date(max.start).toLocaleDateString('es-ES')}) |\n`);
-    md.appendMarkdown(`\n_Los tokens son solo los de Claude Code en este ordenador: no incluyen claude.ai, Cowork ni otros equipos._\n\n`);
+    md.appendMarkdown(`| ${t('This computer, in this window')} | |\n|---|---:|\n`);
+    md.appendMarkdown(`| ${t('Tokens without cache reads')} | ${fmt(b.freshTokens)} |\n| ${t('Tokens processed (total)')} | ${fmt(b.tokens)} |\n| ${t('API calls')} | ${b.calls} |\n`);
+    if (c.get('showCost')) md.appendMarkdown(`| ${t('API-equivalent cost')} | ${money(b.cost)} |\n`);
+    md.appendMarkdown(`| ${t('Rate without cache (30 min)')} | ${fmt(b.perMinFresh)}/min |\n`);
+    if (max) md.appendMarkdown(`| ${t('Your largest block')} | ${t('{0} without cache ({1})', fmt(max.freshTokens), new Date(max.start).toLocaleDateString(locale()))} |\n`);
+    md.appendMarkdown('\n_' + t('Tokens only count Claude Code on this computer: they do not include claude.ai, Cowork or other computers.') + '_\n\n');
   }
-  md.appendMarkdown(`[$(graph) Abrir panel](command:claudeMeter.openPanel)`);
+  md.appendMarkdown(`[$(graph) ${t('Open panel')}](command:claudeMeter.openPanel)`);
   md.isTrusted = { enabledCommands: ['claudeMeter.openPanel'] };
   blkItem.tooltip = md;
   blkItem.show();
@@ -290,8 +302,8 @@ function renderStatus(s) {
   const mode = statusBarMode();
   if (mode === 'none') { ctxItem.hide(); sesItem.hide(); return; }
   if (!s) {
-    ctxItem.text = '$(layers) Claude: sin sesión';
-    ctxItem.tooltip = 'No hay ninguna sesión de Claude Code para esta carpeta. Clic para ver el histórico.';
+    ctxItem.text = '$(layers) ' + t('Claude: no session');
+    ctxItem.tooltip = t('There is no Claude Code session for this folder. Click to see the history.');
     ctxItem.backgroundColor = undefined;
     sesItem.hide();
     ctxItem.show();
@@ -302,31 +314,31 @@ function renderStatus(s) {
   ctxItem.backgroundColor = pct >= c.get('errorPercent') ? new vscode.ThemeColor('statusBarItem.errorBackground')
     : pct >= c.get('warningPercent') ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
 
-  let t = `$(comment-discussion) ${s.prompts} · ${fmt(s.totalTokens)}`;
-  if (c.get('showCost')) t += ` · ${money(s.cost)}`;
-  sesItem.text = t;
+  let text = `$(comment-discussion) ${s.prompts} · ${fmt(s.totalTokens)}`;
+  if (c.get('showCost')) text += ` · ${money(s.cost)}`;
+  sesItem.text = text;
 
   const lp = s.perPrompt[s.perPrompt.length - 1];
   const u = s.lastCallUsage;
   const md = new vscode.MarkdownString(undefined, true);
   md.supportThemeIcons = true;
-  md.appendMarkdown(`**Claude Code · ${s.project}** — ${shortModel(s.model)}\n\n`);
-  md.appendMarkdown(`**Contexto actual:** ${s.currentContext.toLocaleString('es-ES')} tokens (${pct.toFixed(1)}% de ${fmt(s.contextWindow)})  \n`);
-  md.appendMarkdown(`Ventana ${fmt(s.contextWindow)}: ${s.contextWindowReason}  \nPico de la sesión: ${fmt(s.peakContext)}\n\n`);
-  md.appendMarkdown(`| Última llamada | Tokens |\n|---|---:|\n`);
-  md.appendMarkdown(`| Leídos de caché | ${fmt(u.cacheRead)} |\n| Escritos en caché | ${fmt(u.cw5m + u.cw1h)} |\n| Entrada nueva | ${fmt(u.input)} |\n| Salida | ${fmt(u.output)} |\n\n`);
-  md.appendMarkdown(`**Sesión:** ${s.prompts} preguntas · ${s.apiCalls} llamadas · ${fmt(s.totalTokens)} tokens procesados`);
-  if (c.get('showCost')) md.appendMarkdown(` · ${money(s.cost)} (equiv. API)`);
+  md.appendMarkdown(`**Claude Code · ${tp(s.project)}** — ${shortModel(s.model)}\n\n`);
+  md.appendMarkdown(t('**Current context:** {0} tokens ({1}% of {2})', num(s.currentContext), pct.toFixed(1), fmt(s.contextWindow)) + '  \n');
+  md.appendMarkdown(t('{0} window: {1}', fmt(s.contextWindow), t(s.contextWindowReason)) + '  \n' + t('Session peak: {0}', fmt(s.peakContext)) + '\n\n');
+  md.appendMarkdown(`| ${t('Last call')} | ${t('Tokens')} |\n|---|---:|\n`);
+  md.appendMarkdown(`| ${t('Read from cache')} | ${fmt(u.cacheRead)} |\n| ${t('Written to cache')} | ${fmt(u.cw5m + u.cw1h)} |\n| ${t('New input')} | ${fmt(u.input)} |\n| ${t('Output')} | ${fmt(u.output)} |\n\n`);
+  md.appendMarkdown(t('**Session:** {0} prompts · {1} calls · {2} tokens processed', s.prompts, s.apiCalls, fmt(s.totalTokens)));
+  if (c.get('showCost')) md.appendMarkdown(' · ' + t('{0} (API equiv.)', money(s.cost)));
   md.appendMarkdown('\n\n');
-  if (s.subTotals && P.usageTotal(s.subTotals) > 0) md.appendMarkdown(`Subagentes: ${fmt(P.usageTotal(s.subTotals))} tokens\n\n`);
+  if (s.subTotals && P.usageTotal(s.subTotals) > 0) md.appendMarkdown(t('Subagents: {0} tokens', fmt(P.usageTotal(s.subTotals))) + '\n\n');
   if (lp) {
-    const txt = lp.text.replace(/[\r\n]+/g, ' ').replace(/[\\`*_[\]|<>]/g, ' ').slice(0, 90);
-    md.appendMarkdown(`**Última pregunta:** _${txt}${lp.text.length > 90 ? '…' : ''}_  \n`);
-    md.appendMarkdown(`${lp.calls} llamadas · ${fmt(P.usageTotal(lp.usage))} tokens`);
+    const txt = tp(lp.text).replace(/[\r\n]+/g, ' ').replace(/[\\`*_[\]|<>]/g, ' ').slice(0, 90);
+    md.appendMarkdown(`**${t('Last prompt:')}** _${txt}${lp.text.length > 90 ? '…' : ''}_  \n`);
+    md.appendMarkdown(t('{0} calls · {1} tokens', lp.calls, fmt(P.usageTotal(lp.usage))));
     if (c.get('showCost')) md.appendMarkdown(` · ${money(lp.cost)}`);
     md.appendMarkdown('\n\n');
   }
-  md.appendMarkdown(`[$(graph) Abrir panel](command:claudeMeter.openPanel)`);
+  md.appendMarkdown(`[$(graph) ${t('Open panel')}](command:claudeMeter.openPanel)`);
   md.isTrusted = { enabledCommands: ['claudeMeter.openPanel'] };
   ctxItem.tooltip = md;
   sesItem.tooltip = md;
@@ -400,13 +412,17 @@ function updateView() {
   });
 }
 
-function webviewHtml(webview, script, style) {
+// Idioma de VS Code y traducciones para las webviews, como JSON en un atributo (sin scripts en línea)
+function esc(x) { return String(x).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function l10nAttr() { return esc(JSON.stringify({ locale: locale(), bundle: vscode.l10n.bundle || {} })); }
+
+function webviewHtml(webview, script, style, body = '<main id="app"></main>') {
   const nonce = crypto.randomBytes(16).toString('hex');
   const js = webview.asWebviewUri(vscode.Uri.joinPath(ctxRef.extensionUri, 'media', script));
   const css = webview.asWebviewUri(vscode.Uri.joinPath(ctxRef.extensionUri, 'media', style));
-  return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+  return `<!DOCTYPE html><html lang="${esc(locale())}" data-l10n="${l10nAttr()}"><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
-<link rel="stylesheet" href="${css}"></head><body><main id="app"></main>
+<link rel="stylesheet" href="${css}"></head><body>${body}
 <script nonce="${nonce}" src="${js}"></script></body></html>`;
 }
 
@@ -522,21 +538,14 @@ function historyPayload() {
 // ── Panel ───────────────────────────────────────────────────────────────────
 function openPanel() {
   if (panel) { panel.reveal(); return; }
-  panel = vscode.window.createWebviewPanel('claudeMeter', 'Claude · Tokens', vscode.ViewColumn.Active, {
+  panel = vscode.window.createWebviewPanel('claudeMeter', t('Claude · Tokens'), vscode.ViewColumn.Active, {
     enableScripts: true, retainContextWhenHidden: true,
     localResourceRoots: [vscode.Uri.joinPath(ctxRef.extensionUri, 'media')],
   });
-  const nonce = crypto.randomBytes(16).toString('hex');
-  const csp = panel.webview.cspSource;
-  const js = panel.webview.asWebviewUri(vscode.Uri.joinPath(ctxRef.extensionUri, 'media', 'panel.js'));
-  const css = panel.webview.asWebviewUri(vscode.Uri.joinPath(ctxRef.extensionUri, 'media', 'panel.css'));
-  panel.webview.html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${csp}; script-src 'nonce-${nonce}';">
-<link rel="stylesheet" href="${css}"></head><body>
-<nav><button data-tab="live" class="on">Sesión actual</button><button data-tab="hist">Histórico</button>
-<span class="sp"></span><span id="status"></span><button id="refresh">↻ Actualizar</button></nav>
-<main id="app"></main>
-<script nonce="${nonce}" src="${js}"></script></body></html>`;
+  panel.webview.html = webviewHtml(panel.webview, 'panel.js', 'panel.css',
+    `<nav><button data-tab="live" class="on">${esc(t('Current session'))}</button><button data-tab="hist">${esc(t('History'))}</button>
+<span class="sp"></span><span id="status"></span><button id="refresh">↻ ${esc(t('Refresh'))}</button></nav>
+<main id="app"></main>`);
   panel.onDidDispose(() => { panel = undefined; });
   panel.webview.onDidReceiveMessage(async (m) => {
     if (m.type === 'ready' || m.type === 'refresh') {
@@ -563,13 +572,13 @@ function openPanel() {
 function activate(context) {
   ctxRef = context;
   ctxItem = vscode.window.createStatusBarItem('claudeMeter.context', vscode.StatusBarAlignment.Right, 1000);
-  ctxItem.name = 'Claude · contexto';
+  ctxItem.name = t('Claude · context');
   ctxItem.command = 'claudeMeter.openPanel';
   sesItem = vscode.window.createStatusBarItem('claudeMeter.session', vscode.StatusBarAlignment.Right, 999);
-  sesItem.name = 'Claude · sesión';
+  sesItem.name = t('Claude · session');
   sesItem.command = 'claudeMeter.openPanel';
   blkItem = vscode.window.createStatusBarItem('claudeMeter.block', vscode.StatusBarAlignment.Right, 998);
-  blkItem.name = 'Claude · bloque de 5 h';
+  blkItem.name = t('Claude · 5-hour block');
   blkItem.command = 'claudeMeter.openPanel';
   context.subscriptions.push(ctxItem, sesItem, blkItem,
     vscode.commands.registerCommand('claudeMeter.openPanel', openPanel),

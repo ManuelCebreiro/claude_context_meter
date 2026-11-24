@@ -5,6 +5,19 @@
   const vscode = acquireVsCodeApi();
   const app = document.getElementById('app');
 
+  // Idioma: la extensión pone en <html data-l10n> el idioma de VS Code y sus traducciones
+  // (vscode.l10n.bundle). Las claves son los textos en inglés; {0}, {1}… son los argumentos.
+  const L10N = (() => { try { return JSON.parse(document.documentElement.dataset.l10n || '{}'); } catch { return {}; } })();
+  const LOCALE = L10N.locale || 'en';
+  const BUNDLE = L10N.bundle || {};
+  function t(key, ...args) {
+    const v = BUNDLE[key];
+    const msg = typeof v === 'string' ? v : (v && v.message) || key;
+    return msg.replace(/\{(\d+)\}/g, (m, i) => (args[i] !== undefined ? String(args[i]) : m));
+  }
+  // Textos que pone la extensión cuando falta el dato
+  const tp = (x) => (x === '(unknown)' || x === '(no prompts)' || x === '[image]' ? t(x) : x);
+
   function h(tag, attrs, kids) {
     const el = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs || {})) {
@@ -27,10 +40,10 @@
     if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'k';
     return String(Math.round(n));
   }
-  const num = (n) => Math.round(n || 0).toLocaleString('es-ES');
+  const num = (n) => Math.round(n || 0).toLocaleString(LOCALE);
   const money = (x) => '$' + (x >= 100 ? x.toFixed(0) : x >= 1 ? x.toFixed(2) : x.toFixed(3));
-  const hm = (ms) => new Date(ms).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-  const day = (ms) => new Date(ms).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' });
+  const hm = (ms) => new Date(ms).toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
+  const day = (ms) => new Date(ms).toLocaleDateString(LOCALE, { day: '2-digit', month: '2-digit' });
   const dur = (mins) => { const hh = Math.floor(mins / 60), mm = Math.round(mins % 60); return hh ? `${hh}h ${String(mm).padStart(2, '0')}m` : `${mm}m`; };
   const pctOf = (a, b) => b ? a / b * 100 : 0;
   const pctTxt = (p) => p.toFixed(p < 10 ? 1 : 0) + '%';
@@ -77,14 +90,12 @@
     const pct = pctOf(s.currentContext, s.contextWindow);
     const cls = level(pct, cfg.warningPercent, cfg.errorPercent);
     const per = s.contextWindow / 100;
-    const ctxTip = `Esta sesión arrastra ${num(s.currentContext)} tokens de contexto: es lo que Claude vuelve a leer en cada llamada `
-      + `(instrucciones, archivos leídos y toda la conversación). Ocupa el ${pctTxt(pct)} de la ventana de ${fmt(s.contextWindow)}. `
-      + `Cuando se llena, Claude Code compacta la conversación (o puedes hacerlo tú con /compact).`;
-    const waffleTip = `Cada cuadrado es el 1 % de la ventana (${fmt(per)} tokens). `
-      + `${fmt(u.cacheRead)} vienen de caché, ${fmt(u.cw5m + u.cw1h)} se acaban de guardar en caché y ${fmt(u.input)} son entrada nueva. `
-      + `Quedan ${fmt(Math.max(0, s.contextWindow - s.currentContext))} libres.`;
+    const ctxTip = t('This session carries {0} tokens of context: that is what Claude reads again on every call (instructions, files read and the whole conversation). It fills {1} of the {2} window. When it fills up, Claude Code compacts the conversation (or you can do it with /compact).',
+      num(s.currentContext), pctTxt(pct), fmt(s.contextWindow));
+    const waffleTip = t('Each square is 1% of the window ({0} tokens). {1} come from cache, {2} were just written to cache and {3} are new input. {4} left free.',
+      fmt(per), fmt(u.cacheRead), fmt(u.cw5m + u.cw1h), fmt(u.input), fmt(Math.max(0, s.contextWindow - s.currentContext)));
     return h('section', {}, [
-      h('h4', {}, ['Contexto', h('span', { class: 'right', title: 'El contexto más alto que ha llegado a tener esta sesión.' }, 'pico ' + fmt(s.peakContext))]),
+      h('h4', {}, [t('Context'), h('span', { class: 'right', title: t('The highest context this session has reached.') }, t('peak {0}', fmt(s.peakContext)))]),
       h('div', { title: ctxTip }, [
         h('span', { class: 'pct ' + cls }, pctTxt(pct)),
         h('span', { class: 'big' }, [fmt(s.currentContext), h('span', { class: 'of' }, ' / ' + fmt(s.contextWindow))]),
@@ -95,55 +106,54 @@
         { value: u.input, cls: 'c-input' },
       ], s.contextWindow, waffleTip),
       legend([
-        ['c-read', 'de caché', 'Contexto que ya estaba guardado en caché y se ha releído: rápido y barato (10 % del precio de entrada).'],
-        ['c-write', 'nuevo en caché', 'Contexto nuevo (tu mensaje, resultados de herramientas…) que se ha guardado en caché para las siguientes llamadas.'],
-        ['c-input', 'sin caché', 'Entrada que no pasa por la caché.'],
-        ['free', 'libre', 'Espacio que queda en la ventana de contexto.'],
+        ['c-read', t('from cache'), t('Context that was already cached and was read again: fast and cheap (10% of the input price).')],
+        ['c-write', t('new in cache'), t('New context (your message, tool results…) written to cache for the next calls.')],
+        ['c-input', t('uncached'), t('Input that does not go through the cache.')],
+        ['free', t('free'), t('Space left in the context window.')],
       ]),
-      h('div', { class: 'muted small', title: 'Cuántos tokens caben en el contexto de este modelo y por qué.' }, 'Ventana ' + fmt(s.contextWindow) + ': ' + s.contextWindowReason),
+      h('div', { class: 'muted small', title: t('How many tokens fit in this model\'s context, and why.') }, t('{0} window: {1}', fmt(s.contextWindow), t(s.contextWindowReason))),
     ]);
   }
 
   function lastCallSection(s) {
     const u = s.lastCallUsage;
     return h('section', {}, [
-      h('h4', { title: 'La llamada más reciente de Claude Code al modelo. Su entrada (caché leída + escrita + entrada nueva) es el contexto actual.' }, 'Última llamada'),
+      h('h4', { title: t('Claude Code\'s most recent call to the model. Its input (cache read + cache write + new input) is the current context.') }, t('Last call')),
       rows([
-        ['Leídos de caché', fmt(u.cacheRead), 'Contexto que Claude ya tenía en caché y ha vuelto a leer. Es lo que más pesa, pero cuesta un 10 % de la entrada normal.'],
-        ['Escritos en caché', fmt(u.cw5m + u.cw1h), 'Contexto nuevo en esta llamada que se guarda en caché para reutilizarlo en las siguientes.'],
-        ['Entrada nueva', fmt(u.input), 'Tokens enviados sin pasar por la caché.'],
-        ['Salida', fmt(u.output), 'Lo que Claude ha escrito en esta llamada: texto, código y llamadas a herramientas. Entrará en el contexto de la siguiente.'],
+        [t('Read from cache'), fmt(u.cacheRead), t('Context Claude already had in cache and read again. It is the largest part, but costs 10% of normal input.')],
+        [t('Written to cache'), fmt(u.cw5m + u.cw1h), t('New context in this call, written to cache to reuse in the next ones.')],
+        [t('New input'), fmt(u.input), t('Tokens sent without going through the cache.')],
+        [t('Output'), fmt(u.output), t('What Claude wrote in this call: text, code and tool calls. It will be part of the next call\'s context.')],
       ]),
     ]);
   }
 
   function sessionSection(s, cfg) {
-    const t = s.totals || { cacheRead: 0, cw5m: 0, cw1h: 0, input: 0, output: 0 };
+    const tt = s.totals || { cacheRead: 0, cw5m: 0, cw1h: 0, input: 0, output: 0 };
     const total = s.totalTokens || 1;
     const seg = (value, cls, tip) => value > 0 ? h('i', { class: 'seg ' + cls, title: tip, style: 'width:' + (value / total * 100).toFixed(2) + '%' }) : null;
-    const rereadPct = pctOf(t.cacheRead, s.totalTokens);
+    const rereadPct = pctOf(tt.cacheRead, s.totalTokens);
     const fixed = s.firstCallUsage ? s.firstCallUsage.cacheRead : 0;
-    const cacheTip = `En cada llamada, Claude Code reenvía todo el contexto: sus instrucciones, las herramientas, tus CLAUDE.md y la conversación entera. `
-      + `Lo que ya estaba en caché se lee de ahí, que es más rápido y cuesta un 10 % de la entrada normal. `
-      + (fixed > 0 ? `Pasa incluso en un chat nuevo: en su primera llamada ya se leyeron ${fmt(fixed)} tokens de caché (las instrucciones y herramientas de Claude Code, que tus otros chats habían dejado en caché). ` : '')
-      + `Por eso, cuantas más llamadas hace un chat, más pesa la caché leída en el total.`;
+    const cacheTip = t('On every call, Claude Code resends the whole context: its instructions, the tools, your CLAUDE.md files and the entire conversation. What was already cached is read from there, which is faster and costs 10% of normal input.')
+      + (fixed > 0 ? ' ' + t('It happens even in a new chat: its first call already read {0} tokens from cache (Claude Code\'s instructions and tools, which your other chats had left in cache).', fmt(fixed)) : '')
+      + ' ' + t('That is why the more calls a chat makes, the more cache reads weigh in the total.');
     return h('section', {}, [
-      h('h4', {}, 'Sesión'),
-      h('div', { class: 'stack', role: 'img', 'aria-label': 'Composición de los tokens procesados' }, [
-        seg(t.cacheRead, 'c-read', `Relecturas de caché: ${fmt(t.cacheRead)} (${pctTxt(rereadPct)}). Cada llamada vuelve a leer el contexto, por eso es la mayor parte.`),
-        seg(t.cw5m + t.cw1h, 'c-write', `Escrito en caché: ${fmt(t.cw5m + t.cw1h)}.`),
-        seg(t.input, 'c-input', `Entrada sin caché: ${fmt(t.input)}.`),
-        seg(t.output, 'c-output', `Salida de Claude: ${fmt(t.output)}.`),
+      h('h4', {}, t('Session')),
+      h('div', { class: 'stack', role: 'img', 'aria-label': t('Breakdown of processed tokens') }, [
+        seg(tt.cacheRead, 'c-read', t('Cache reads: {0} ({1}). Every call reads the context again, which is why it is the largest part.', fmt(tt.cacheRead), pctTxt(rereadPct))),
+        seg(tt.cw5m + tt.cw1h, 'c-write', t('Written to cache: {0}.', fmt(tt.cw5m + tt.cw1h))),
+        seg(tt.input, 'c-input', t('Uncached input: {0}.', fmt(tt.input))),
+        seg(tt.output, 'c-output', t('Claude\'s output: {0}.', fmt(tt.output))),
       ]),
       h('div', { class: 'muted small tip', title: cacheTip },
-        `${pctTxt(rereadPct)} de lo procesado se leyó de caché (contexto reenviado en cada llamada)`),
+        t('{0} of what was processed was read from cache (context resent on every call)', pctTxt(rereadPct))),
       rows([
-        ['Preguntas', String(s.prompts), 'Mensajes que has escrito tú en esta sesión (sin contar los resultados de herramientas).'],
-        ['Llamadas a la API', String(s.apiCalls), 'Veces que Claude Code ha llamado al modelo. Una pregunta suele generar varias: una por cada paso o herramienta.'],
-        ['Tokens procesados', fmt(s.totalTokens), 'Suma de todas las llamadas, contando cada relectura del contexto. Por eso crece mucho más deprisa que el contexto.'],
-        ['Sin caché leída', fmt(s.freshTokens), 'Lo procesado sin contar las relecturas de caché: entrada nueva, salida y escritura en caché.'],
-        s.subTokens > 0 ? ['Subagentes', fmt(s.subTokens), 'Tokens de los subagentes que ha lanzado Claude (incluidos en el total). Tienen su propio contexto, no ocupan el tuyo.'] : null,
-        cfg.showCost ? ['Coste equiv. API', money(s.cost), 'Lo que costaría esta sesión pagando la API a precio público. Con Pro o Max no es lo que pagas.'] : null,
+        [t('Prompts'), String(s.prompts), t('Messages you have written in this session (not counting tool results).')],
+        [t('API calls'), String(s.apiCalls), t('Times Claude Code has called the model. One prompt usually makes several: one per step or tool.')],
+        [t('Tokens processed'), fmt(s.totalTokens), t('Sum of all calls, counting every re-read of the context. That is why it grows much faster than the context.')],
+        [t('Without cache reads'), fmt(s.freshTokens), t('What was processed without counting cache reads: new input, output and cache writes.')],
+        s.subTokens > 0 ? [t('Subagents'), fmt(s.subTokens), t('Tokens from the subagents Claude has launched (included in the total). They have their own context and do not take up yours.')] : null,
+        cfg.showCost ? [t('API-equivalent cost'), money(s.cost), t('What this session would cost paying for the API at list price. With Pro or Max it is not what you pay.')] : null,
       ]),
     ]);
   }
@@ -152,24 +162,24 @@
     if (!p) return null;
     const added = p.startCtx == null ? null : p.endCtx - p.startCtx;
     return h('section', {}, [
-      h('h4', {}, ['Última pregunta', p.ts ? h('span', { class: 'right', title: 'Hora a la que la escribiste.' }, hm(p.ts)) : null]),
-      h('div', { class: 'q', title: p.text }, p.text),
+      h('h4', {}, [t('Last prompt'), p.ts ? h('span', { class: 'right', title: t('When you wrote it.') }, hm(p.ts)) : null]),
+      h('div', { class: 'q', title: tp(p.text) }, tp(p.text)),
       rows([
-        ['Contexto', (p.startCtx == null ? '—' : fmt(p.startCtx)) + ' → ' + fmt(p.endCtx),
-          'Contexto al empezar a responder → al terminar.' + (added != null ? ` Esta pregunta ha añadido ${fmt(Math.max(0, added))} tokens al contexto.` : '')],
-        ['Llamadas', String(p.calls) + (p.subCalls ? ' + ' + p.subCalls + ' subag.' : ''), 'Llamadas al modelo para responder a esta pregunta (más las de subagentes, si los hubo).'],
-        ['Tokens', fmt(p.tokens), 'Todo lo procesado para responder a esta pregunta, contando las relecturas de caché de cada llamada.'],
-        cfg.showCost ? ['Coste', money(p.cost), 'Lo que habría costado esta respuesta por la API a precio público.'] : null,
+        [t('Context'), (p.startCtx == null ? '—' : fmt(p.startCtx)) + ' → ' + fmt(p.endCtx),
+          t('Context when the answer started → when it finished.') + (added != null ? ' ' + t('This prompt added {0} tokens to the context.', fmt(Math.max(0, added))) : '')],
+        [t('Calls'), String(p.calls) + (p.subCalls ? ' + ' + t('{0} subag.', p.subCalls) : ''), t('Calls to the model to answer this prompt (plus subagent calls, if any).')],
+        [t('Tokens'), fmt(p.tokens), t('Everything processed to answer this prompt, counting the cache reads of every call.')],
+        cfg.showCost ? [t('Cost'), money(p.cost), t('What this answer would have cost through the API at list price.')] : null,
       ]),
     ]);
   }
 
   const ago = (ms) => {
     const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
-    return m < 1 ? 'hace un momento' : m < 60 ? `hace ${m} min` : `hace ${dur(m)}`;
+    return m < 1 ? t('just now') : t('{0} ago', m < 60 ? `${m} min` : dur(m));
   };
-  const dayTime = (ms) => new Date(ms).toLocaleString('es-ES', { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-  const UPDATE_TIP = 'Claude Code guarda este dato cuando consulta tu uso a Anthropic (por ejemplo al escribir /usage). La extensión solo lo lee: no se conecta a nada.';
+  const dayTime = (ms) => new Date(ms).toLocaleString(LOCALE, { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const UPDATE_TIP = t('Claude Code saves this data when it checks your usage with Anthropic (for example when you type /usage). The extension only reads it: it does not connect to anything.');
 
   // Límite oficial de 5 h y semanal (de ~/.claude.json)
   function officialSection(st) {
@@ -181,40 +191,40 @@
       const cls = pct >= 95 ? 'bad' : pct >= cfg.blockWarnRatio * 100 ? 'warn' : '';
       const mins = (off.five.resetsAt - Date.now()) / 60000;
       sec.append(
-        h('h4', { title: 'Tu límite de uso de 5 horas, según Anthropic. Cuenta todo: Claude Code, claude.ai, Cowork y otros equipos.' },
-          ['Límite de 5 h', h('span', { class: 'right', title: `La ventana termina a las ${hm(off.five.resetsAt)}; entonces el % vuelve a 0.` }, 'se reinicia ' + hm(off.five.resetsAt))]),
-        h('div', { title: `Has usado el ${pct} % de tu límite de 5 horas. Quedan ${dur(mins)} para que se reinicie (a las ${hm(off.five.resetsAt)}).` }, [
-          h('span', { class: 'pct ' + cls }, 'en ' + dur(mins)),
-          h('span', { class: 'big' }, [pct + '%', h('span', { class: 'of' }, ' usado · oficial')]),
+        h('h4', { title: t('Your 5-hour usage limit, according to Anthropic. It counts everything: Claude Code, claude.ai, Cowork and other computers.') },
+          [t('5-hour limit'), h('span', { class: 'right', title: t('The window ends at {0}; then the % goes back to 0.', hm(off.five.resetsAt)) }, t('resets {0}', hm(off.five.resetsAt)))]),
+        h('div', { title: t('You have used {0}% of your 5-hour limit. {1} left until it resets (at {2}).', pct, dur(mins), hm(off.five.resetsAt)) }, [
+          h('span', { class: 'pct ' + cls }, t('in {0}', dur(mins))),
+          h('span', { class: 'big' }, [pct + '%', h('span', { class: 'of' }, ' ' + t('used · official'))]),
         ]),
         waffle([{ value: pct, cls: 'b-used' + (cls ? ' ' + cls : '') }], 100,
-          `Cada cuadrado es el 1 % de tu límite de 5 horas. Llevas ${pct} de 100.`),
+          t('Each square is 1% of your 5-hour limit. You are at {0} of 100.', pct)),
       );
     } else if (off.expiredAt) {
       const next = b && b.alignedToOfficial ? b.end : null;
       sec.append(
-        h('h4', { title: 'Tu límite de uso de 5 horas, según Anthropic.' },
-          ['Límite de 5 h', next ? h('span', { class: 'right', title: 'Calculado encadenando ventanas de 5 h desde el último reinicio oficial.' }, 'se reinicia ~' + hm(next)) : null]),
+        h('h4', { title: t('Your 5-hour usage limit, according to Anthropic.') },
+          [t('5-hour limit'), next ? h('span', { class: 'right', title: t('Calculated by chaining 5-hour windows from the last official reset.') }, t('resets ~{0}', hm(next))) : null]),
         h('div', { class: 'muted', title: UPDATE_TIP },
-          `Se reinició a las ${hm(off.expiredAt)}.` + (next ? ` La ventana actual termina hacia las ${hm(next)}.` : ' La siguiente empieza con tu próximo mensaje.')
-          + ' El nuevo % aparecerá cuando Claude Code lo vuelva a consultar (por ejemplo con /usage).'),
+          t('It reset at {0}.', hm(off.expiredAt)) + ' ' + (next ? t('The current window ends around {0}.', hm(next)) : t('The next one starts with your next message.'))
+          + ' ' + t('The new % will appear when Claude Code checks it again (for example with /usage).')),
       );
     }
     if (off.week) {
       const wcls = off.week.pct >= 95 ? 'bad' : off.week.pct >= cfg.blockWarnRatio * 100 ? 'warn' : '';
-      const parts = (off.breakdown || []).map(r => `${r.name}: ${r.percent} %`).join(', ');
+      const parts = (off.breakdown || []).map(r => `${r.name}: ${r.percent}%`).join(', ');
       sec.append(
-        h('div', { class: 'weekrow', title: `Llevas el ${off.week.pct} % de tu límite semanal. Se reinicia el ${dayTime(off.week.resetsAt)}.`
-          + (parts ? ` Reparto de lo usado esta semana: ${parts}.` : '') }, [
-          h('span', { class: 'muted' }, 'Semanal'),
+        h('div', { class: 'weekrow', title: t('You are at {0}% of your weekly limit. It resets {1}.', off.week.pct, dayTime(off.week.resetsAt))
+          + (parts ? ' ' + t('Breakdown of this week\'s usage: {0}.', parts) : '') }, [
+          h('span', { class: 'muted' }, t('Weekly')),
           h('span', { class: 'bar' }, h('i', { class: 'fill ' + wcls, style: 'width:' + Math.min(100, off.week.pct) + '%' })),
           h('span', { class: 'v' }, off.week.pct + '%'),
         ]),
-        h('div', { class: 'muted small' }, 'se reinicia ' + dayTime(off.week.resetsAt)
+        h('div', { class: 'muted small' }, t('resets {0}', dayTime(off.week.resetsAt))
           + (off.breakdown && off.breakdown.length ? ' · ' + off.breakdown.map(r => `${r.name} ${r.percent}%`).join(' · ') : '')),
       );
     }
-    if (off.fetchedAt) sec.append(h('div', { class: 'note muted', title: UPDATE_TIP }, `Dato oficial de ${ago(off.fetchedAt)}`));
+    if (off.fetchedAt) sec.append(h('div', { class: 'note muted', title: UPDATE_TIP }, t('Official data from {0}', ago(off.fetchedAt))));
     return sec;
   }
 
@@ -227,29 +237,29 @@
     const aligned = hasOfficialPct || (b && b.alignedToOfficial);
     const sec = h('section', {}, [h('h4', {
       title: aligned
-        ? 'La ventana de 5 h actual del límite oficial. Aquí solo se ve Claude Code de este ordenador (no claude.ai, Cowork ni otros equipos).'
-        : 'Sin dato oficial, la ventana se estima con Claude Code de este ordenador: empieza con tu primer mensaje y dura 5 horas.',
-    }, [aligned ? 'Ventana actual' : 'Bloque de 5 h (estimado)', b ? h('span', { class: 'right', title: 'Inicio y fin de la ventana.' }, hm(b.start) + ' → ' + hm(b.end)) : null])]);
+        ? t('The current 5-hour window of the official limit. Only Claude Code on this computer shows here (not claude.ai, Cowork or other computers).')
+        : t('Without official data, the window is estimated from Claude Code on this computer: it starts with your first message and lasts 5 hours.'),
+    }, [aligned ? t('Current window') : t('5-hour block (estimated)'), b ? h('span', { class: 'right', title: t('Start and end of the window.') }, hm(b.start) + ' → ' + hm(b.end)) : null])]);
     if (!b) {
-      sec.append(h('div', { class: 'muted' }, 'Sin actividad de Claude Code en este ordenador en la ventana actual.'));
+      sec.append(h('div', { class: 'muted' }, t('No Claude Code activity on this computer in the current window.')));
       return sec;
     }
 
     // 1) Este proyecto
     const cur = b.currentProject;
-    const curName = (st.live && st.live.project) || ((b.projects || []).find(p => p.current) || {}).name || 'Este proyecto';
+    const curName = tp((st.live && st.live.project) || ((b.projects || []).find(p => p.current) || {}).name || t('This project'));
     if (cur) {
       sec.append(
-        h('div', { class: 'sub', title: `Lo que ha gastado Claude Code en ${curName} (todos sus chats y subagentes) dentro de la ventana actual.` }, [
-          h('span', { class: 'muted' }, 'Este proyecto · '), curName,
+        h('div', { class: 'sub', title: t('What Claude Code has used in {0} (all its chats and subagents) within the current window.', curName) }, [
+          h('span', { class: 'muted' }, t('This project') + ' · '), curName,
         ]),
-        h('div', { title: `${curName}: ${num(cur.freshTokens)} tokens sin contar las relecturas de caché (${fmt(cur.tokens)} contándolas) en esta ventana.` }, [
-          h('span', { class: 'big' }, [fmt(cur.freshTokens), h('span', { class: 'of' }, ' sin caché · ' + fmt(cur.tokens) + ' total')]),
+        h('div', { title: t('{0}: {1} tokens without counting cache reads ({2} counting them) in this window.', curName, num(cur.freshTokens), fmt(cur.tokens)) }, [
+          h('span', { class: 'big' }, [fmt(cur.freshTokens), h('span', { class: 'of' }, ' ' + t('uncached · {0} total', fmt(cur.tokens)))]),
         ]),
         rows([
-          ['Ritmo (30 min)', cur.perMinFresh > 0 ? fmt(cur.perMinFresh) + '/min' : 'parado', 'Tokens por minuto (sin caché leída) de este proyecto en los últimos 30 minutos.'],
-          ['Llamadas', String(cur.calls), 'Llamadas al modelo de este proyecto en esta ventana.'],
-          cfg.showCost ? ['Coste equiv. API', money(cur.cost), 'Lo que costaría por la API a precio público. Con Pro o Max no es lo que pagas.'] : null,
+          [t('Rate (30 min)'), cur.perMinFresh > 0 ? fmt(cur.perMinFresh) + '/min' : t('idle'), t('Tokens per minute (without cache reads) for this project in the last 30 minutes.')],
+          [t('Calls'), String(cur.calls), t('Calls to the model from this project in this window.')],
+          cfg.showCost ? [t('API-equivalent cost'), money(cur.cost), t('What it would cost through the API at list price. With Pro or Max it is not what you pay.')] : null,
         ]),
       );
     }
@@ -258,15 +268,15 @@
     const ratio = max && max.freshTokens ? b.freshTokens / max.freshTokens : 0;
     const cls = ratio >= 1 ? 'bad' : ratio >= cfg.blockWarnRatio ? 'warn' : '';
     const others = (b.projects || []).filter(p => !p.current && p.recentFresh > 0).map(p => p.name);
-    const allTip = 'El límite de 5 h cuenta todo lo que usas, en todos tus proyectos (y también claude.ai y Cowork). '
-      + `En esta ventana, Claude Code de este ordenador lleva ${num(b.freshTokens)} tokens sin caché leída (${fmt(b.tokens)} contándola).`
-      + (others.length ? ` Ahora mismo está trabajando en: ${others.join(', ')}; por eso este total sube aunque no hagas nada aquí.` : '')
-      + (max ? ` Es el ${Math.round(ratio * 100)} % de tu bloque más grande.` : '');
+    const allTip = t('The 5-hour limit counts everything you use, across all your projects (and also claude.ai and Cowork).')
+      + ' ' + t('In this window, Claude Code on this computer is at {0} tokens without cache reads ({1} counting them).', num(b.freshTokens), fmt(b.tokens))
+      + (others.length ? ' ' + t('Right now it is working on: {0}; that is why this total goes up even if you do nothing here.', others.map(tp).join(', ')) : '')
+      + (max ? ' ' + t('It is {0}% of your largest block.', Math.round(ratio * 100)) : '');
     sec.append(
-      h('div', { class: 'sub', title: allTip }, [h('span', { class: 'muted' }, 'Todos tus proyectos · '), 'este ordenador']),
+      h('div', { class: 'sub', title: allTip }, [h('span', { class: 'muted' }, t('All your projects') + ' · '), t('this computer')]),
       h('div', { title: allTip }, [
-        max ? h('span', { class: 'pct ' + cls, title: 'Comparado con tu bloque de 5 h más grande en este ordenador.' }, Math.round(ratio * 100) + '% de tu máx.') : null,
-        h('span', { class: 'big' }, [fmt(b.freshTokens), h('span', { class: 'of' }, ' sin caché · ' + fmt(b.tokens) + ' total')]),
+        max ? h('span', { class: 'pct ' + cls, title: t('Compared with your largest 5-hour block on this computer.') }, t('{0}% of your max', Math.round(ratio * 100))) : null,
+        h('span', { class: 'big' }, [fmt(b.freshTokens), h('span', { class: 'of' }, ' ' + t('uncached · {0} total', fmt(b.tokens)))]),
       ]),
     );
     const list = b.projects || [];
@@ -274,15 +284,15 @@
       const top = list[0].freshTokens || 1;
       sec.append(h('div', { class: 'projlist' }, list.map(p => h('div', {
         class: 'projrow' + (p.current ? ' current' : ''),
-        title: `${p.name}: ${num(p.freshTokens)} tokens sin caché (${fmt(p.tokens)} con caché), ${p.calls} llamadas en esta ventana.`
-          + (p.recentFresh > 0 ? ' Ha trabajado en los últimos 30 minutos.' : ' Sin actividad en los últimos 30 minutos.')
-          + (p.current ? ' Es el proyecto abierto.' : ''),
+        title: t('{0}: {1} uncached tokens ({2} with cache), {3} calls in this window.', tp(p.name), num(p.freshTokens), fmt(p.tokens), p.calls)
+          + ' ' + (p.recentFresh > 0 ? t('It has been active in the last 30 minutes.') : t('No activity in the last 30 minutes.'))
+          + (p.current ? ' ' + t('It is the open project.') : ''),
       }, [
-        h('span', { class: 'pname' }, [p.recentFresh > 0 ? h('i', { class: 'live' }) : null, p.name]),
+        h('span', { class: 'pname' }, [p.recentFresh > 0 ? h('i', { class: 'live' }) : null, tp(p.name)]),
         h('span', { class: 'pbar' }, h('i', { class: 'fill', style: 'width:' + Math.max(2, p.freshTokens / top * 100).toFixed(1) + '%' })),
         h('span', { class: 'v' }, fmt(p.freshTokens)),
       ]))));
-      if (b.otherProjects) sec.append(h('div', { class: 'muted small' }, `y ${b.otherProjects} proyecto${b.otherProjects === 1 ? '' : 's'} más`));
+      if (b.otherProjects) sec.append(h('div', { class: 'muted small' }, b.otherProjects === 1 ? t('and 1 more project') : t('and {0} more projects', b.otherProjects)));
     }
     // Sin % oficial, los cuadraditos comparan el total con tu bloque más grande
     if (max && !hasOfficialPct) {
@@ -292,28 +302,27 @@
           { value: Math.min(b.freshTokens, max.freshTokens), cls: 'b-used' + (cls ? ' ' + cls : '') },
           { value: proj, cls: 'b-proj' },
         ], max.freshTokens,
-        `Cada cuadrado es el 1 % de tu bloque más grande (${fmt(max.freshTokens / 100)} tokens sin caché). `
-          + `Rellenos: lo que llevas. Con borde: lo que llevarías al acabar el bloque si sigues al mismo ritmo. Apagados: lo que falta hasta tu máximo.`
-          + (ratio >= 1 ? ' Ya has superado tu máximo.' : '')),
+        t('Each square is 1% of your largest block ({0} uncached tokens). Filled: what you have used. Outlined: what you would reach by the end of the block at the same rate. Dimmed: what is left up to your max.', fmt(max.freshTokens / 100))
+          + (ratio >= 1 ? ' ' + t('You have already gone over your max.') : '')),
         legend([
-          ['b-used', 'usado', 'Lo que llevas en este bloque (sin caché leída), todos los proyectos.'],
-          ['b-proj', 'previsión', 'Lo que añadirías hasta que se reinicie si mantienes el ritmo de los últimos 30 minutos.'],
-          ['free', 'hasta tu máximo', 'Lo que falta para igualar tu bloque más grande.'],
+          ['b-used', t('used'), t('What you have used in this block (without cache reads), all projects.')],
+          ['b-proj', t('forecast'), t('What you would add before it resets if you keep the rate of the last 30 minutes.')],
+          ['free', t('up to your max'), t('What is left to match your largest block.')],
         ]),
       );
     }
     sec.append(rows([
-      hasOfficialPct ? null : ['Se reinicia en', dur(b.minsLeft), `La ventana termina a las ${hm(b.end)}.` + (b.alignedToOfficial ? ' Calculado desde el último reinicio oficial.' : ' Estimado.')],
-      max ? ['Tu bloque más grande', fmt(max.freshTokens) + ' (' + day(max.start) + ')', 'La ventana de 5 h en la que más ha gastado Claude Code en este ordenador (sin caché leída, todos los proyectos).'] : null,
-      ['Ritmo total (30 min)', fmt(b.perMinFresh) + '/min', 'Tokens por minuto (sin caché leída) de todos tus proyectos en los últimos 30 minutos.'],
-      ['Si sigues así', fmt(b.projectedFresh), 'Lo que llevarías entre todos los proyectos al terminar la ventana si se mantiene el ritmo actual.'],
-      ['Llamadas', String(b.calls), 'Llamadas al modelo en esta ventana, de todos tus proyectos.'],
-      cfg.showCost ? ['Coste equiv. API', money(b.cost), 'Lo que costaría por la API a precio público, todos los proyectos. Con Pro o Max no es lo que pagas.'] : null,
+      hasOfficialPct ? null : [t('Resets in'), dur(b.minsLeft), t('The window ends at {0}.', hm(b.end)) + ' ' + (b.alignedToOfficial ? t('Calculated from the last official reset.') : t('Estimated.'))],
+      max ? [t('Your largest block'), fmt(max.freshTokens) + ' (' + day(max.start) + ')', t('The 5-hour window in which Claude Code used the most on this computer (without cache reads, all projects).')] : null,
+      [t('Total rate (30 min)'), fmt(b.perMinFresh) + '/min', t('Tokens per minute (without cache reads) across all your projects in the last 30 minutes.')],
+      [t('At this rate'), fmt(b.projectedFresh), t('What all projects together would reach by the end of the window if the current rate holds.')],
+      [t('Calls'), String(b.calls), t('Calls to the model in this window, across all your projects.')],
+      cfg.showCost ? [t('API-equivalent cost'), money(b.cost), t('What it would cost through the API at list price, all projects. With Pro or Max it is not what you pay.')] : null,
     ]));
     if (!hasOfficialPct && max && b.projectedFresh > max.freshTokens && ratio < 1) {
-      sec.append(h('div', { class: 'warnline' }, '⚠ A este ritmo superarás tu bloque más grande antes de que se reinicie.'));
+      sec.append(h('div', { class: 'warnline' }, '⚠ ' + t('At this rate you will go over your largest block before it resets.')));
     }
-    if (!max) sec.append(h('div', { class: 'note muted' }, st.scanDone ? 'Aún no hay bloques anteriores para comparar.' : 'Calculando tus bloques anteriores…'));
+    if (!max) sec.append(h('div', { class: 'note muted' }, st.scanDone ? t('There are no previous blocks to compare with yet.') : t('Calculating your previous blocks…')));
     return sec;
   }
 
@@ -322,20 +331,20 @@
     const s = st.live;
     if (s) {
       kids.push(h('div', { class: 'head' }, [
-        h('span', { class: 'proj', title: 'Proyecto de la sesión de Claude Code que se está midiendo.' }, s.project),
-        h('span', { class: 'model muted', title: 'Modelo de la última respuesta.' }, s.model),
+        h('span', { class: 'proj', title: t('Project of the Claude Code session being measured.') }, tp(s.project)),
+        h('span', { class: 'model muted', title: t('Model of the last response.') }, s.model),
       ]));
       // Qué chat se está midiendo: un chat nuevo no aparece hasta su primer mensaje
       const when = s.firstTs ? day(Date.parse(s.firstTs)) + ' ' + hm(Date.parse(s.firstTs)) : '';
-      kids.push(h('div', { class: 'chat muted small', title: `Se mide el chat más reciente de esta carpeta: «${s.title}». `
-        + 'Un chat nuevo aparece aquí en cuanto envías su primer mensaje; hasta entonces Claude Code no crea su archivo y se sigue viendo el anterior.' },
-        `Chat del ${when} · ${s.prompts} ${s.prompts === 1 ? 'pregunta' : 'preguntas'}`));
+      kids.push(h('div', { class: 'chat muted small', title: t('The most recent chat in this folder is being measured: “{0}”.', tp(s.title))
+        + ' ' + t('A new chat appears here as soon as you send its first message; until then Claude Code does not create its file and the previous one is still shown.') },
+        t('Chat from {0}', when) + ' · ' + (s.prompts === 1 ? t('1 prompt') : t('{0} prompts', s.prompts))));
       kids.push(contextSection(s, st.cfg), lastCallSection(s), sessionSection(s, st.cfg), promptSection(s.lastPrompt, st.cfg));
     } else {
-      kids.push(h('div', { class: 'empty' }, 'No hay ninguna sesión de Claude Code en esta carpeta todavía. En cuanto escribas a Claude aparecerá aquí.'));
+      kids.push(h('div', { class: 'empty' }, t('There is no Claude Code session in this folder yet. It will show up here as soon as you write to Claude.')));
     }
     kids.push(officialSection(st), blockSection(st));
-    kids.push(h('button', { onclick: () => vscode.postMessage({ type: 'openPanel' }), title: 'Histórico de sesiones, gráfico por pregunta y bloques anteriores.' }, 'Abrir panel completo'));
+    kids.push(h('button', { onclick: () => vscode.postMessage({ type: 'openPanel' }), title: t('Session history, chart per prompt and previous blocks.') }, t('Open full panel')));
     app.replaceChildren(...kids.filter(Boolean));
   }
 

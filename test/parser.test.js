@@ -114,6 +114,8 @@ test('SessionState: preguntas, comandos y lo que no es una pregunta', () => {
     JSON.stringify({ type: 'user', timestamp: new Date(T0 + 2).toISOString(), message: { content: [{ type: 'tool_result', content: 'x' }] } }),
     userLine('<system-reminder>nada</system-reminder>', T0 + 3),
     userLine('meta', T0 + 4, { isMeta: true }),
+    userLine('<task-notification><task-id>a</task-id></task-notification>', T0 + 4),
+    userLine('aviso del sistema', T0 + 4, { promptSource: 'system', origin: { kind: 'task-notification' } }),
     JSON.stringify({ type: 'system', subtype: 'compact_boundary' }),
     userLine('tras compactar', T0 + 5),
   ]);
@@ -271,6 +273,22 @@ test('readClaudeEnv: lee los settings del proyecto (solo lectura)', async (t) =>
   assert.equal(env.disable1m, true);
   assert.equal(env.model1m, true);
   assert.equal(fs.statSync(file).mtimeMs, before, 'no modifica el archivo');
+});
+
+test('CLAUDE_CONFIG_DIR: settings de usuario y .claude.json salen de esa carpeta', async (t) => {
+  const dir = tmpDir(t);
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ env: { CLAUDE_CODE_DISABLE_1M_CONTEXT: '1' } }));
+  const prev = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  t.after(() => { if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = prev; });
+  assert.equal(P.claudeConfigDir(), dir);
+  assert.equal(P.claudeJsonPath(), path.join(dir, '.claude.json'));
+  assert.equal((await P.readClaudeEnv([])).disable1m, true);
+  // PROJECTS_DIR se calcula al cargar el módulo: en un proceso nuevo con la variable puesta
+  const { execFileSync } = require('child_process');
+  const out = execFileSync(process.execPath, ['-e', `process.stdout.write(require(${JSON.stringify(path.join(__dirname, '..', 'src', 'parser.js'))}).PROJECTS_DIR)`],
+    { env: { ...process.env, CLAUDE_CONFIG_DIR: dir } }).toString();
+  assert.equal(out, path.join(dir, 'projects'));
 });
 
 test('readClaudeEnv: un settings con JSON roto se ignora', async (t) => {

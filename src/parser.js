@@ -6,7 +6,11 @@ const os = require('os');
 const fsp = fs.promises;
 const { StringDecoder } = require('string_decoder');
 
-const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+// Carpeta de configuración de Claude Code: CLAUDE_CONFIG_DIR si está definida, si no ~/.claude
+function claudeConfigDir() {
+  return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+}
+const PROJECTS_DIR = path.join(claudeConfigDir(), 'projects');
 
 // ── Precios (USD por millón de tokens) — equivalente API, aproximado ─────────
 // [input, output, cacheWrite5m, cacheWrite1h, cacheRead]
@@ -41,6 +45,7 @@ function callCost(model, u, overrides) {
   return (u.input * p[0] + u.output * p[1] + u.cw5m * p[2] + u.cw1h * p[3] + u.cacheRead * p[4]) / 1e6;
 }
 
+// Los motivos (`reason`) van en inglés: son claves de traducción (l10n/bundle.l10n.*.json).
 // Ventana de contexto según la documentación de Claude Code (model-config):
 // - 1M por defecto: Fable 5/5.1+, Mythos 5+, Sonnet 5 y posteriores, Haiku 5.5, Opus 4.7 y posteriores.
 // - Opus 4.6 y Sonnet 4.6: 1M solo con la variante [1m]; si no, 200K.
@@ -54,19 +59,19 @@ function nativeOneMillion(m) {
 }
 
 function contextWindowFor(model, setting, env) {
-  if (setting && setting > 0) return { size: setting, reason: 'ajuste manual' };
+  if (setting && setting > 0) return { size: setting, reason: 'manual setting' };
   env = env || {};
-  if (env.disable1m) return { size: 200_000, reason: 'CLAUDE_CODE_DISABLE_1M_CONTEXT=1 en tu configuración' };
+  if (env.disable1m) return { size: 200_000, reason: 'CLAUDE_CODE_DISABLE_1M_CONTEXT=1 in your settings' };
   const m = (model || '').toLowerCase();
-  if (m.includes('[1m]')) return { size: 1_000_000, reason: 'variante [1m]' };
-  if (nativeOneMillion(m)) return { size: 1_000_000, reason: 'el modelo usa 1M por defecto' };
+  if (m.includes('[1m]')) return { size: 1_000_000, reason: '[1m] variant' };
+  if (nativeOneMillion(m)) return { size: 1_000_000, reason: 'the model uses 1M by default' };
   if (/(opus|sonnet)-4-6/.test(m)) {
-    if (env.model1m) return { size: 1_000_000, reason: 'tienes un modelo [1m] configurado' };
-    if (env.observedOver200k) return { size: 1_000_000, reason: 'la sesión ya superó 200K, así que usa [1m]' };
-    return { size: 200_000, reason: 'Opus/Sonnet 4.6 sin [1m]' };
+    if (env.model1m) return { size: 1_000_000, reason: 'you have a [1m] model configured' };
+    if (env.observedOver200k) return { size: 1_000_000, reason: 'the session already went over 200K, so it uses [1m]' };
+    return { size: 200_000, reason: 'Opus/Sonnet 4.6 without [1m]' };
   }
-  if (env.observedOver200k) return { size: 1_000_000, reason: 'la sesión ya superó 200K' };
-  return { size: 200_000, reason: 'modelo con ventana de 200K' };
+  if (env.observedOver200k) return { size: 1_000_000, reason: 'the session already went over 200K' };
+  return { size: 200_000, reason: 'model with a 200K window' };
 }
 
 // ── Utilidades ───────────────────────────────────────────────────────────────
@@ -90,6 +95,8 @@ function readUsage(raw) {
 
 function promptText(entry) {
   if (entry.type !== 'user' || entry.isSidechain || entry.isMeta || entry.isCompactSummary) return null;
+  // Avisos que mete Claude Code (p. ej. al terminar una tarea en segundo plano): no los escribe el usuario
+  if (entry.promptSource === 'system') return null;
   const c = entry.message && entry.message.content;
   let text = null;
   if (typeof c === 'string') text = c;
@@ -97,7 +104,7 @@ function promptText(entry) {
     if (c.some(b => b && b.type === 'tool_result')) return null;
     const t = c.find(b => b && b.type === 'text');
     if (t) text = t.text;
-    else if (c.some(b => b && b.type === 'image')) text = '[imagen]';
+    else if (c.some(b => b && b.type === 'image')) text = '[image]';
   }
   if (!text) return null;
   text = text.trim();
@@ -107,6 +114,7 @@ function promptText(entry) {
     return (cmd[1].trim() + ' ' + (args ? args[1] : '')).trim();
   }
   if (text.startsWith('<local-command') || text.startsWith('Caveat:') || text.startsWith('<system-reminder>')) return null;
+  if (text.startsWith('<task-notification>')) return null;
   if (text.startsWith('[Request interrupted')) return null;
   return text;
 }
@@ -205,8 +213,8 @@ class SessionState {
       file: this.file,
       sessionId: this.sessionId,
       cwd: this.cwd,
-      project: this.cwd ? (this.cwd.split(/[\\/]/).filter(Boolean).pop() || this.cwd) : '(desconocido)',
-      title: this.title || (this.prompts[0] ? this.prompts[0].text.slice(0, 120) : '(sin preguntas)'),
+      project: this.cwd ? (this.cwd.split(/[\\/]/).filter(Boolean).pop() || this.cwd) : '(unknown)',
+      title: this.title || (this.prompts[0] ? this.prompts[0].text.slice(0, 120) : '(no prompts)'),
       firstTs: this.firstTs, lastTs: this.lastTs,
       prompts: this.prompts.length,
       apiCalls,
@@ -389,7 +397,7 @@ async function findActiveSession(workspacePaths, root = PROJECTS_DIR, { fallback
 }
 
 // ── Uso oficial del plan ────────────────────────────────────────────────────
-// Claude Code guarda en ~/.claude.json (solo lectura) el último uso oficial que consultó a
+// Claude Code guarda en ~/.claude.json (o $CLAUDE_CONFIG_DIR/.claude.json; solo lectura) el último uso oficial que consultó a
 // Anthropic: % de la ventana de 5 h, % semanal y sus horas de reinicio. Solo se extraen esos
 // campos (nada de la cuenta). Se vuelve a leer solo si el archivo ha cambiado.
 function claudeJsonPath() {
@@ -427,9 +435,10 @@ async function readOfficialUsage(file = claudeJsonPath()) {
 }
 
 // Lee (sin modificar) la configuración de Claude Code para saber si el 1M está desactivado
-// o si hay un modelo [1m] elegido. Mira variables de entorno y los settings de usuario y proyecto.
+// o si hay un modelo [1m] elegido. Mira variables de entorno y los settings de usuario
+// (en CLAUDE_CONFIG_DIR si está definida) y de proyecto.
 async function readClaudeEnv(workspacePaths) {
-  const files = [path.join(os.homedir(), '.claude', 'settings.json')];
+  const files = [path.join(claudeConfigDir(), 'settings.json')];
   for (const w of workspacePaths || []) {
     files.push(path.join(w, '.claude', 'settings.json'), path.join(w, '.claude', 'settings.local.json'));
   }
@@ -448,7 +457,7 @@ async function readClaudeEnv(workspacePaths) {
 }
 
 module.exports = {
-  readClaudeEnv, readOfficialUsage, parseOfficialUsage,
+  readClaudeEnv, readOfficialUsage, parseOfficialUsage, claudeConfigDir, claudeJsonPath,
   PROJECTS_DIR, SessionState, IncrementalReader, parseSessionFile, listSessionFiles,
   findActiveSession, readCwd, subagentFiles, feedSubagentFile, feedSubagentLine, readWholeFile, contextWindowFor, callCost, usageTotal,
   contextOf, freshOf, encodeProjectDir, normPath, readUsage,

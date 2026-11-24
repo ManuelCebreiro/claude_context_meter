@@ -4,7 +4,7 @@
 
 See how much you are using Claude Code without leaving VS Code: the context of the current conversation, what each chat costs, your 5-hour and weekly limits, and a history of all your sessions. Everything runs locally: no network, and nothing in Claude Code is changed.
 
-*The extension's interface is currently in Spanish. [Versión en español más abajo](#español).*
+*The interface follows VS Code's display language: English by default, also available in Spanish. [Versión en español más abajo](#español).*
 
 ![Claude Meter view below the Claude Code chat](images/view.png)
 
@@ -65,6 +65,7 @@ Requires VS Code 1.90 or later. The view is placed below the official Claude Cod
 ## How it works and privacy
 
 - It reads the transcripts Claude Code already saves in `~/.claude/projects/` and, for the official limits only, the usage Claude Code stores in `~/.claude.json`. From that file it only extracts the percentages and reset times, nothing about your account.
+- If you set `CLAUDE_CONFIG_DIR`, it reads from that folder instead (`$CLAUDE_CONFIG_DIR/projects/`, `$CLAUDE_CONFIG_DIR/settings.json` and `$CLAUDE_CONFIG_DIR/.claude.json`), like Claude Code does.
 - It makes no network requests, installs no hooks and never writes to `~/.claude`.
 - It keeps its own history (`history.json` and `blocks.json`) in the extension's storage, unless you turn off `claudeMeter.saveToDisk`.
 - Files are read asynchronously and in chunks, so VS Code is never blocked.
@@ -96,6 +97,8 @@ Muestra tu consumo de Claude Code dentro de VS Code: el contexto de la conversac
 
 **Instalación:** descarga el `.vsix` de la última [release](https://github.com/ManuelCebreiro/claude_context_meter/releases) y, en VS Code, Extensiones → `···` → **Instalar desde VSIX…**
 
-**Privacidad:** solo lee los transcripts de `~/.claude/projects/` y, para los límites oficiales, el % y las horas de reinicio que Claude Code guarda en `~/.claude.json`. No se conecta a nada ni escribe en `~/.claude`.
+**Idioma:** la interfaz sigue el idioma de VS Code (inglés por defecto o español).
+
+**Privacidad:** solo lee los transcripts de `~/.claude/projects/` y, para los límites oficiales, el % y las horas de reinicio que Claude Code guarda en `~/.claude.json` (con `CLAUDE_CONFIG_DIR`, lee de esa carpeta, como Claude Code). No se conecta a nada ni escribe en `~/.claude`.
 
 Licencia MIT.

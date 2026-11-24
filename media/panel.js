@@ -6,6 +6,19 @@
   let tab = 'live', blocks = null, live = null, hist = [], detail = null, showCost = true, project = '';
   let warnPct = 60, errPct = 80, blockWarn = 0.8; // se sobrescriben con la configuración
 
+  // Idioma: la extensión pone en <html data-l10n> el idioma de VS Code y sus traducciones
+  // (vscode.l10n.bundle). Las claves son los textos en inglés; {0}, {1}… son los argumentos.
+  const L10N = (() => { try { return JSON.parse(document.documentElement.dataset.l10n || '{}'); } catch { return {}; } })();
+  const LOCALE = L10N.locale || 'en';
+  const BUNDLE = L10N.bundle || {};
+  function t(key, ...args) {
+    const v = BUNDLE[key];
+    const msg = typeof v === 'string' ? v : (v && v.message) || key;
+    return msg.replace(/\{(\d+)\}/g, (m, i) => (args[i] !== undefined ? String(args[i]) : m));
+  }
+  // Textos que pone la extensión cuando falta el dato
+  const tp = (x) => (x === '(unknown)' || x === '(no prompts)' || x === '[image]' ? t(x) : x);
+
   // ── helpers ──
   function h(tag, attrs, kids) {
     const el = document.createElement(tag);
@@ -36,8 +49,8 @@
   const money = (x) => '$' + (x >= 100 ? x.toFixed(0) : x >= 1 ? x.toFixed(2) : x.toFixed(3));
   const tot = (u) => u ? u.input + u.output + u.cw5m + u.cw1h + u.cacheRead : 0;
   const shortModel = (m) => (m || '?').replace(/^claude-/, '').replace(/-\d{8}$/, '');
-  const dt = (ts) => ts ? new Date(ts).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
-  const hm = (ts) => ts ? new Date(ts).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '';
+  const dt = (ts) => ts ? new Date(ts).toLocaleString(LOCALE, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  const hm = (ts) => ts ? new Date(ts).toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' }) : '';
   const dayKey = (ts) => { const d = new Date(ts); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 
   function card(label, value, sub, extra) {
@@ -51,30 +64,30 @@
   // ── Sesión (actual o detalle) ──
   function sessionView(sm, isLive) {
     const wrap = h('div');
-    if (!sm) { wrap.append(h('p', { class: 'empty' }, 'No hay ninguna sesión de Claude Code activa en esta carpeta.')); return wrap; }
+    if (!sm) { wrap.append(h('p', { class: 'empty' }, t('There is no active Claude Code session in this folder.'))); return wrap; }
     const pct = sm.contextWindow ? sm.currentContext / sm.contextWindow * 100 : 0;
     wrap.append(h('div', { class: 'head' }, [
-      h('div', {}, [h('h2', {}, sm.project), h('div', { class: 'muted' }, [shortModel(sm.model), ' · ', dt(sm.firstTs), ' → ', dt(sm.lastTs)])]),
-      h('div', { class: 'muted title' }, sm.title),
+      h('div', {}, [h('h2', {}, tp(sm.project)), h('div', { class: 'muted' }, [shortModel(sm.model), ' · ', dt(sm.firstTs), ' → ', dt(sm.lastTs)])]),
+      h('div', { class: 'muted title' }, tp(sm.title)),
     ]));
     const cards = h('div', { class: 'cards' }, [
-      card(isLive ? 'Contexto actual' : 'Contexto final', fmt(sm.currentContext), pct.toFixed(1) + '% de ' + fmt(sm.contextWindow) + ' · pico ' + fmt(sm.peakContext), meter(pct)),
-      card('Tokens procesados', fmt(sm.totalTokens), 'caché leída ' + fmt(sm.totals.cacheRead) + ' · salida ' + fmt(sm.totals.output)),
-      card('Preguntas', String(sm.prompts), sm.apiCalls + ' llamadas a la API'),
+      card(isLive ? t('Current context') : t('Final context'), fmt(sm.currentContext), t('{0}% of {1} · peak {2}', pct.toFixed(1), fmt(sm.contextWindow), fmt(sm.peakContext)), meter(pct)),
+      card(t('Tokens processed'), fmt(sm.totalTokens), t('cache read {0} · output {1}', fmt(sm.totals.cacheRead), fmt(sm.totals.output))),
+      card(t('Prompts'), String(sm.prompts), t('{0} API calls', sm.apiCalls)),
     ]);
-    if (showCost) cards.append(card('Coste equiv. API', money(sm.cost), 'aprox., no es lo que pagas con Pro/Max'));
-    if (tot(sm.subTotals) > 0) cards.append(card('Subagentes', fmt(tot(sm.subTotals)), 'incluidos en el total'));
+    if (showCost) cards.append(card(t('API-equivalent cost'), money(sm.cost), t('approx., not what you pay with Pro/Max')));
+    if (tot(sm.subTotals) > 0) cards.append(card(t('Subagents'), fmt(tot(sm.subTotals)), t('included in the total')));
     wrap.append(cards);
 
     const pp = sm.perPrompt || [];
     if (pp.length) {
-      wrap.append(h('h3', {}, 'Contexto que arrastra cada pregunta'));
+      wrap.append(h('h3', {}, t('Context carried by each prompt')));
       wrap.append(contextChart(pp, sm.contextWindow));
-      wrap.append(h('h3', {}, 'Preguntas'));
+      wrap.append(h('h3', {}, t('Prompts')));
       const rows = pp.map((p, i) => h('tr', { class: p.compactBefore ? 'compact' : '' }, [
         h('td', { class: 'num' }, String(i + 1)),
         h('td', { class: 'muted' }, hm(p.ts)),
-        h('td', { class: 'q', title: p.text }, [p.compactBefore ? h('span', { class: 'tag' }, 'compactado') : null, p.text.replace(/\s+/g, ' ').slice(0, 160)]),
+        h('td', { class: 'q', title: tp(p.text) }, [p.compactBefore ? h('span', { class: 'tag' }, t('compacted')) : null, tp(p.text).replace(/\s+/g, ' ').slice(0, 160)]),
         h('td', { class: 'num' }, p.startCtx == null ? '—' : fmt(p.startCtx)),
         h('td', { class: 'num' }, fmt(p.endCtx)),
         h('td', { class: 'num' }, String(p.calls) + (p.subCalls ? ' +' + p.subCalls : '')),
@@ -83,12 +96,12 @@
         showCost ? h('td', { class: 'num' }, money(p.cost)) : null,
       ]));
       wrap.append(h('table', {}, [
-        h('thead', {}, h('tr', {}, [h('th', {}, '#'), h('th', {}, 'Hora'), h('th', {}, 'Pregunta'),
-          h('th', { title: 'Tokens de contexto enviados en la primera llamada de esta pregunta' }, 'Ctx inicio'),
-          h('th', { title: 'Contexto al terminar de responder' }, 'Ctx fin'),
-          h('th', { title: 'Llamadas a la API (+ de subagentes)' }, 'Llam.'),
-          h('th', {}, 'Salida'), h('th', { title: 'Tokens procesados (incluye relecturas de caché)' }, 'Total'),
-          showCost ? h('th', {}, 'Coste') : null])),
+        h('thead', {}, h('tr', {}, [h('th', {}, '#'), h('th', {}, t('Time')), h('th', {}, t('Prompt')),
+          h('th', { title: t('Context tokens sent in the first call of this prompt') }, t('Ctx start')),
+          h('th', { title: t('Context when the answer finished') }, t('Ctx end')),
+          h('th', { title: t('API calls (+ subagent calls)') }, t('Calls')),
+          h('th', {}, t('Output')), h('th', { title: t('Tokens processed (includes cache reads)') }, t('Total')),
+          showCost ? h('th', {}, t('Cost')) : null])),
         h('tbody', {}, rows.reverse()),
       ]));
     }
@@ -105,17 +118,17 @@
       const bh = Math.max(1, v / max * H);
       const pct = win ? v / win * 100 : 0;
       const r = s('rect', { x: pad + i * bw + 1, y: H - bh, width: Math.max(1, bw - 2), height: bh, class: 'bar' + (pct >= errPct ? ' bad' : pct >= warnPct ? ' warn' : '') + (pp[i].compactBefore ? ' cmp' : '') });
-      r.append(s('title', {}, `#${i + 1} · ${fmt(v)} tokens (${pct.toFixed(1)}%)\n${pp[i].text.slice(0, 100)}`));
+      r.append(s('title', {}, `#${i + 1} · ${fmt(v)} tokens (${pct.toFixed(1)}%)\n${tp(pp[i].text).slice(0, 100)}`));
       svg.append(r);
     });
-    svg.append(s('text', { x: pad, y: H + 14, class: 'axis' }, 'máx ' + fmt(max) + ' · ventana ' + fmt(win)));
+    svg.append(s('text', { x: pad, y: H + 14, class: 'axis' }, t('max {0} · window {1}', fmt(max), fmt(win))));
     return svg;
   }
 
   // ── Histórico ──
   function histView() {
     if (detail) {
-      return h('div', {}, [h('button', { class: 'back', onclick: () => { detail = null; render(); } }, '← Volver al histórico'), sessionView(detail, false)]);
+      return h('div', {}, [h('button', { class: 'back', onclick: () => { detail = null; render(); } }, '← ' + t('Back to history')), sessionView(detail, false)]);
     }
     const wrap = h('div');
     const projects = [...new Set(hist.map(x => x.project))].sort();
@@ -124,13 +137,13 @@
     const today = dayKey(now);
     const since = (days) => { const d = new Date(now); d.setDate(d.getDate() - days + 1); return dayKey(d); };
     const agg = (from) => list.filter(x => x.lastTs && dayKey(x.lastTs) >= from).reduce((a, x) => ({ t: a.t + x.totalTokens, c: a.c + x.cost, n: a.n + 1, q: a.q + x.prompts }), { t: 0, c: 0, n: 0, q: 0 });
-    const cards = [['Hoy', agg(today)], ['7 días', agg(since(7))], ['30 días', agg(since(30))], ['Total guardado', agg('0000')]];
+    const cards = [[t('Today'), agg(today)], [t('7 days'), agg(since(7))], [t('30 days'), agg(since(30))], [t('Total saved'), agg('0000')]];
     wrap.append(h('div', { class: 'filters' }, [
-      h('label', {}, 'Proyecto: '),
+      h('label', {}, t('Project:') + ' '),
       h('select', { onchange: (e) => { project = e.target.value; render(); } },
-        [h('option', { value: '' }, 'Todos')].concat(projects.map(p => { const o = h('option', { value: p }, p); if (p === project) o.selected = true; return o; }))),
+        [h('option', { value: '' }, t('All'))].concat(projects.map(p => { const o = h('option', { value: p }, tp(p)); if (p === project) o.selected = true; return o; }))),
     ]));
-    wrap.append(h('div', { class: 'cards' }, cards.map(([l, a]) => card(l, fmt(a.t) + ' tok', a.n + ' sesiones · ' + a.q + ' preguntas' + (showCost ? ' · ' + money(a.c) : '')))));
+    wrap.append(h('div', { class: 'cards' }, cards.map(([l, a]) => card(l, fmt(a.t) + ' tok', t('{0} sessions · {1} prompts', a.n, a.q) + (showCost ? ' · ' + money(a.c) : '')))));
 
     // tokens por día (30 días)
     const days = [];
@@ -146,17 +159,17 @@
       svg.append(r);
       if (i % 5 === 0 || i === 29) svg.append(s('text', { x: i * bw + 1, y: H + 14, class: 'axis' }, d.slice(5)));
     });
-    wrap.append(h('h3', {}, 'Tokens por día (últimos 30 días)'), svg);
+    wrap.append(h('h3', {}, t('Tokens per day (last 30 days)')), svg);
 
     wrap.append(blocksView());
-    wrap.append(h('h3', {}, 'Sesiones (' + list.length + ')'));
+    wrap.append(h('h3', {}, t('Sessions ({0})', list.length)));
     const rows = list.slice().sort((a, b) => (b.lastTs || '').localeCompare(a.lastTs || '')).map(x => h('tr', {
       class: 'click' + (x.deleted ? ' gone' : ''), onclick: () => vscode.postMessage({ type: 'detail', file: x.file }),
-      title: x.deleted ? 'Claude Code ya borró este transcript; se conserva el resumen' : x.file,
+      title: x.deleted ? t('Claude Code already deleted this transcript; the summary is kept') : x.file,
     }, [
       h('td', { class: 'muted' }, dt(x.lastTs)),
-      h('td', {}, x.project),
-      h('td', { class: 'q' }, x.title.replace(/\s+/g, ' ').slice(0, 110)),
+      h('td', {}, tp(x.project)),
+      h('td', { class: 'q' }, tp(x.title).replace(/\s+/g, ' ').slice(0, 110)),
       h('td', { class: 'num' }, String(x.prompts)),
       h('td', { class: 'num' }, fmt(x.peakContext)),
       h('td', { class: 'num' }, fmt(x.totalTokens)),
@@ -164,26 +177,26 @@
       showCost ? h('td', { class: 'num' }, money(x.cost)) : null,
     ]));
     wrap.append(h('table', {}, [
-      h('thead', {}, h('tr', {}, [h('th', {}, 'Última act.'), h('th', {}, 'Proyecto'), h('th', {}, 'Sesión'), h('th', {}, 'Preg.'),
-        h('th', {}, 'Pico ctx'), h('th', {}, 'Tokens'), h('th', {}, 'Modelo'), showCost ? h('th', {}, 'Coste') : null])),
+      h('thead', {}, h('tr', {}, [h('th', {}, t('Last update')), h('th', {}, t('Project')), h('th', {}, t('Session')), h('th', {}, t('Prompts')),
+        h('th', {}, t('Peak ctx')), h('th', {}, t('Tokens')), h('th', {}, t('Model')), showCost ? h('th', {}, t('Cost')) : null])),
       h('tbody', {}, rows),
     ]));
-    if (!list.length) wrap.append(h('p', { class: 'empty' }, 'Aún no hay sesiones guardadas.'));
+    if (!list.length) wrap.append(h('p', { class: 'empty' }, t('No saved sessions yet.')));
     return wrap;
   }
 
   function blocksView() {
     const w = h('div');
-    w.append(h('h3', {}, 'Bloques de 5 horas (todo Claude Code de este ordenador)'));
-    if (!blocks) { w.append(h('p', { class: 'muted' }, 'Calculando…')); return w; }
+    w.append(h('h3', {}, t('5-hour blocks (all Claude Code on this computer)')));
+    if (!blocks) { w.append(h('p', { class: 'muted' }, t('Calculating…'))); return w; }
     // El máximo y la barra usan tokens sin caché leída (igual que la barra de estado)
     const max = blocks.max && typeof blocks.max.freshTokens === 'number' ? blocks.max.freshTokens : 0;
     const fresh = (b) => typeof b.freshTokens === 'number' ? b.freshTokens : null;
-    const t = (ms) => new Date(ms).toLocaleString('es-ES', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const when = (ms) => new Date(ms).toLocaleString(LOCALE, { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     const rowsData = (blocks.past || []).slice(-15).reverse();
     const rows = [];
     const mk = (b, isCur) => h('tr', { class: isCur ? 'cur' : '' }, [
-      h('td', {}, [isCur ? h('span', { class: 'tag' }, 'ahora') : null, t(b.start)]),
+      h('td', {}, [isCur ? h('span', { class: 'tag' }, t('now')) : null, when(b.start)]),
       h('td', { class: 'num' }, fresh(b) == null ? '—' : fmt(fresh(b))),
       h('td', { class: 'num muted' }, fmt(b.tokens)),
       h('td', { class: 'barcell' }, h('div', { class: 'meter' }, h('div', { class: 'fill' + (max && fresh(b) >= max ? ' bad' : max && fresh(b) >= max * blockWarn ? ' warn' : ''), style: 'width:' + (max && fresh(b) != null ? Math.min(100, fresh(b) / max * 100) : 0).toFixed(1) + '%' }))),
@@ -192,12 +205,12 @@
     ]);
     if (blocks.current) rows.push(mk(blocks.current, true));
     for (const b of rowsData) rows.push(mk(b, false));
-    if (!rows.length) { w.append(h('p', { class: 'muted' }, 'Sin bloques todavía.')); return w; }
+    if (!rows.length) { w.append(h('p', { class: 'muted' }, t('No blocks yet.'))); return w; }
     w.append(h('table', {}, [
-      h('thead', {}, h('tr', {}, [h('th', {}, 'Inicio'),
-        h('th', { title: 'Entrada nueva + salida + escritura en caché (sin la caché leída)' }, 'Sin caché'),
-        h('th', { title: 'Incluye las relecturas de caché' }, 'Total'),
-        h('th', { title: 'Tokens sin caché respecto a tu bloque más grande' }, 'Respecto a tu máximo'), h('th', {}, 'Llamadas'), showCost ? h('th', {}, 'Coste') : null])),
+      h('thead', {}, h('tr', {}, [h('th', {}, t('Start')),
+        h('th', { title: t('New input + output + cache writes (without cache reads)') }, t('Uncached')),
+        h('th', { title: t('Includes cache reads') }, t('Total')),
+        h('th', { title: t('Uncached tokens compared with your largest block') }, t('Compared with your max')), h('th', {}, t('Calls')), showCost ? h('th', {}, t('Cost')) : null])),
       h('tbody', {}, rows),
     ]));
     return w;
@@ -225,8 +238,8 @@
       render();
     }
     else if (m.type === 'live') { live = m.data; if (tab === 'live') render(); }
-    else if (m.type === 'history') { hist = m.data; statusEl.textContent = m.scanning ? 'Leyendo sesiones…' : ''; if (tab === 'hist') render(); }
-    else if (m.type === 'progress') statusEl.textContent = 'Leyendo sesiones… ' + m.i + '/' + m.n;
+    else if (m.type === 'history') { hist = m.data; statusEl.textContent = m.scanning ? t('Reading sessions…') : ''; if (tab === 'hist') render(); }
+    else if (m.type === 'progress') statusEl.textContent = t('Reading sessions…') + ' ' + m.i + '/' + m.n;
     else if (m.type === 'blocks') { blocks = m; if (tab === 'hist' && !detail) render(); }
     else if (m.type === 'detail') { detail = m.data; tab = 'hist'; render(); }
   });

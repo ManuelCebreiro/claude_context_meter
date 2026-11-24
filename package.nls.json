@@ -1,0 +1,20 @@
+{
+  "command.openPanel": "Open token panel",
+  "command.refresh": "Detect the session again",
+  "command.showView": "Show the view",
+  "view.name": "Claude Meter",
+  "config.title": "Context Meter for Claude Code",
+  "config.showCost": "Show the equivalent API cost (approximate; with Pro/Max it is not what you pay).",
+  "config.contextWindow": "Context window in tokens. 0 = automatic, using Claude Code's rules (1M by default on Opus 4.7+, Sonnet 5+, Haiku 5.5 and Fable; Opus/Sonnet 4.6 only with [1m]; honors CLAUDE_CODE_DISABLE_1M_CONTEXT).",
+  "config.warningPercent": "Context % at which the status bar turns yellow.",
+  "config.errorPercent": "Context % at which the status bar turns red.",
+  "config.statusBar": "What to show in the status bar. The Claude Meter view, below the Claude Code chat, always shows everything.",
+  "config.statusBar.all": "Context, session and 5-hour block",
+  "config.statusBar.context": "Context only",
+  "config.statusBar.none": "Nothing (everything is in the Claude Meter view)",
+  "config.showBlock": "Show usage of the current 5-hour block (estimated from all Claude Code on this computer).",
+  "config.blockWarnRatio": "Fraction of your largest 5-hour block at which the indicator turns yellow (red when it goes over).",
+  "config.saveToDisk": "Save the session and 5-hour block history (history.json and blocks.json, in the extension's own storage) to keep it when Claude Code deletes old transcripts. When off, the extension writes nothing to disk: it only reads the transcripts and keeps new data in memory. Existing files are not deleted.",
+  "config.pollMs": "How often, in milliseconds, the active transcript is read again.",
+  "config.priceOverrides": "Custom prices per model (USD per million): { \"opus-5-5\": [input, output, cacheWrite5m, cacheWrite1h, cacheRead] }."
+}
