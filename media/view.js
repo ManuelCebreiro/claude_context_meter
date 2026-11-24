@@ -218,31 +218,73 @@
     return sec;
   }
 
-  // Claude Code en este ordenador durante la ventana actual (los tokens que se ven en local)
+  // Claude Code en este ordenador durante la ventana actual: primero el proyecto abierto,
+  // después todos los proyectos (lo que cuenta para el límite) con su reparto.
   function blockSection(st) {
     const b = st.block, max = st.max, cfg = st.cfg;
     if (!cfg.showBlock) return null;
     const hasOfficialPct = !!(st.official && st.official.five);
-    const title = hasOfficialPct || (b && b.alignedToOfficial) ? 'Este ordenador · ventana actual' : 'Bloque de 5 h (estimado)';
+    const aligned = hasOfficialPct || (b && b.alignedToOfficial);
     const sec = h('section', {}, [h('h4', {
-      title: hasOfficialPct || (b && b.alignedToOfficial)
-        ? 'Lo que ha gastado Claude Code en este ordenador dentro de la ventana de 5 h actual. No incluye claude.ai, Cowork ni otros equipos.'
-        : 'Sin dato oficial, el bloque se estima con Claude Code de este ordenador: empieza con tu primer mensaje y dura 5 horas.',
-    }, [title, b ? h('span', { class: 'right', title: 'Inicio y fin de la ventana.' }, hm(b.start) + ' → ' + hm(b.end)) : null])]);
+      title: aligned
+        ? 'La ventana de 5 h actual del límite oficial. Aquí solo se ve Claude Code de este ordenador (no claude.ai, Cowork ni otros equipos).'
+        : 'Sin dato oficial, la ventana se estima con Claude Code de este ordenador: empieza con tu primer mensaje y dura 5 horas.',
+    }, [aligned ? 'Ventana actual' : 'Bloque de 5 h (estimado)', b ? h('span', { class: 'right', title: 'Inicio y fin de la ventana.' }, hm(b.start) + ' → ' + hm(b.end)) : null])]);
     if (!b) {
       sec.append(h('div', { class: 'muted' }, 'Sin actividad de Claude Code en este ordenador en la ventana actual.'));
       return sec;
     }
+
+    // 1) Este proyecto
+    const cur = b.currentProject;
+    const curName = (st.live && st.live.project) || ((b.projects || []).find(p => p.current) || {}).name || 'Este proyecto';
+    if (cur) {
+      sec.append(
+        h('div', { class: 'sub', title: `Lo que ha gastado Claude Code en ${curName} (todos sus chats y subagentes) dentro de la ventana actual.` }, [
+          h('span', { class: 'muted' }, 'Este proyecto · '), curName,
+        ]),
+        h('div', { title: `${curName}: ${num(cur.freshTokens)} tokens sin contar las relecturas de caché (${fmt(cur.tokens)} contándolas) en esta ventana.` }, [
+          h('span', { class: 'big' }, [fmt(cur.freshTokens), h('span', { class: 'of' }, ' sin caché · ' + fmt(cur.tokens) + ' total')]),
+        ]),
+        rows([
+          ['Ritmo (30 min)', cur.perMinFresh > 0 ? fmt(cur.perMinFresh) + '/min' : 'parado', 'Tokens por minuto (sin caché leída) de este proyecto en los últimos 30 minutos.'],
+          ['Llamadas', String(cur.calls), 'Llamadas al modelo de este proyecto en esta ventana.'],
+          cfg.showCost ? ['Coste equiv. API', money(cur.cost), 'Lo que costaría por la API a precio público. Con Pro o Max no es lo que pagas.'] : null,
+        ]),
+      );
+    }
+
+    // 2) Todos los proyectos de este ordenador
     const ratio = max && max.freshTokens ? b.freshTokens / max.freshTokens : 0;
     const cls = ratio >= 1 ? 'bad' : ratio >= cfg.blockWarnRatio ? 'warn' : '';
-    const bigTip = `En esta ventana, Claude Code ha usado aquí ${num(b.freshTokens)} tokens sin contar las relecturas de caché `
-      + `(${fmt(b.tokens)} contándolas), sumando todos tus proyectos y subagentes.`
+    const others = (b.projects || []).filter(p => !p.current && p.recentFresh > 0).map(p => p.name);
+    const allTip = 'El límite de 5 h cuenta todo lo que usas, en todos tus proyectos (y también claude.ai y Cowork). '
+      + `En esta ventana, Claude Code de este ordenador lleva ${num(b.freshTokens)} tokens sin caché leída (${fmt(b.tokens)} contándola).`
+      + (others.length ? ` Ahora mismo está trabajando en: ${others.join(', ')}; por eso este total sube aunque no hagas nada aquí.` : '')
       + (max ? ` Es el ${Math.round(ratio * 100)} % de tu bloque más grande.` : '');
-    sec.append(h('div', { title: bigTip }, [
-      max ? h('span', { class: 'pct ' + cls, title: 'Comparado con tu bloque de 5 h más grande en este ordenador.' }, Math.round(ratio * 100) + '% de tu máx.') : null,
-      h('span', { class: 'big' }, [fmt(b.freshTokens), h('span', { class: 'of' }, ' sin caché · ' + fmt(b.tokens) + ' total')]),
-    ]));
-    // Sin % oficial, los cuadraditos comparan con tu bloque más grande
+    sec.append(
+      h('div', { class: 'sub', title: allTip }, [h('span', { class: 'muted' }, 'Todos tus proyectos · '), 'este ordenador']),
+      h('div', { title: allTip }, [
+        max ? h('span', { class: 'pct ' + cls, title: 'Comparado con tu bloque de 5 h más grande en este ordenador.' }, Math.round(ratio * 100) + '% de tu máx.') : null,
+        h('span', { class: 'big' }, [fmt(b.freshTokens), h('span', { class: 'of' }, ' sin caché · ' + fmt(b.tokens) + ' total')]),
+      ]),
+    );
+    const list = b.projects || [];
+    if (list.length) {
+      const top = list[0].freshTokens || 1;
+      sec.append(h('div', { class: 'projlist' }, list.map(p => h('div', {
+        class: 'projrow' + (p.current ? ' current' : ''),
+        title: `${p.name}: ${num(p.freshTokens)} tokens sin caché (${fmt(p.tokens)} con caché), ${p.calls} llamadas en esta ventana.`
+          + (p.recentFresh > 0 ? ' Ha trabajado en los últimos 30 minutos.' : ' Sin actividad en los últimos 30 minutos.')
+          + (p.current ? ' Es el proyecto abierto.' : ''),
+      }, [
+        h('span', { class: 'pname' }, [p.recentFresh > 0 ? h('i', { class: 'live' }) : null, p.name]),
+        h('span', { class: 'pbar' }, h('i', { class: 'fill', style: 'width:' + Math.max(2, p.freshTokens / top * 100).toFixed(1) + '%' })),
+        h('span', { class: 'v' }, fmt(p.freshTokens)),
+      ]))));
+      if (b.otherProjects) sec.append(h('div', { class: 'muted small' }, `y ${b.otherProjects} proyecto${b.otherProjects === 1 ? '' : 's'} más`));
+    }
+    // Sin % oficial, los cuadraditos comparan el total con tu bloque más grande
     if (max && !hasOfficialPct) {
       const proj = Math.max(0, Math.min(b.projectedFresh, max.freshTokens) - b.freshTokens);
       sec.append(
@@ -254,7 +296,7 @@
           + `Rellenos: lo que llevas. Con borde: lo que llevarías al acabar el bloque si sigues al mismo ritmo. Apagados: lo que falta hasta tu máximo.`
           + (ratio >= 1 ? ' Ya has superado tu máximo.' : '')),
         legend([
-          ['b-used', 'usado', 'Lo que llevas en este bloque (sin caché leída).'],
+          ['b-used', 'usado', 'Lo que llevas en este bloque (sin caché leída), todos los proyectos.'],
           ['b-proj', 'previsión', 'Lo que añadirías hasta que se reinicie si mantienes el ritmo de los últimos 30 minutos.'],
           ['free', 'hasta tu máximo', 'Lo que falta para igualar tu bloque más grande.'],
         ]),
@@ -262,11 +304,11 @@
     }
     sec.append(rows([
       hasOfficialPct ? null : ['Se reinicia en', dur(b.minsLeft), `La ventana termina a las ${hm(b.end)}.` + (b.alignedToOfficial ? ' Calculado desde el último reinicio oficial.' : ' Estimado.')],
-      max ? ['Tu bloque más grande', fmt(max.freshTokens) + ' (' + day(max.start) + ')', 'La ventana de 5 h en la que más ha gastado Claude Code en este ordenador (sin caché leída).'] : null,
-      ['Ritmo (30 min)', fmt(b.perMinFresh) + '/min', 'Media de tokens por minuto (sin caché leída) en los últimos 30 minutos.'],
-      ['Si sigues así', fmt(b.projectedFresh), 'Lo que llevarías al terminar la ventana si mantienes el ritmo actual.'],
+      max ? ['Tu bloque más grande', fmt(max.freshTokens) + ' (' + day(max.start) + ')', 'La ventana de 5 h en la que más ha gastado Claude Code en este ordenador (sin caché leída, todos los proyectos).'] : null,
+      ['Ritmo total (30 min)', fmt(b.perMinFresh) + '/min', 'Tokens por minuto (sin caché leída) de todos tus proyectos en los últimos 30 minutos.'],
+      ['Si sigues así', fmt(b.projectedFresh), 'Lo que llevarías entre todos los proyectos al terminar la ventana si se mantiene el ritmo actual.'],
       ['Llamadas', String(b.calls), 'Llamadas al modelo en esta ventana, de todos tus proyectos.'],
-      cfg.showCost ? ['Coste equiv. API', money(b.cost), 'Lo que costaría por la API a precio público. Con Pro o Max no es lo que pagas.'] : null,
+      cfg.showCost ? ['Coste equiv. API', money(b.cost), 'Lo que costaría por la API a precio público, todos los proyectos. Con Pro o Max no es lo que pagas.'] : null,
     ]));
     if (!hasOfficialPct && max && b.projectedFresh > max.freshTokens && ratio < 1) {
       sec.append(h('div', { class: 'warnline' }, '⚠ A este ritmo superarás tu bloque más grande antes de que se reinicie.'));

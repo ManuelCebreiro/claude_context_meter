@@ -81,3 +81,15 @@ button[data-tip] { cursor: pointer; }
 .weekrow { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; margin-top: 8px; font-variant-numeric: tabular-nums; }
 .weekrow .bar { display: block; height: 6px; border-radius: 3px; overflow: hidden; background: var(--vscode-editorWidget-border, rgba(128,128,128,.25)); }
 .weekrow .fill { display: block; }
+
+/* Ventana actual: este proyecto / todos los proyectos */
+.sub { margin: 8px 0 1px; font-size: 11px; font-weight: 600; }
+.sub:first-of-type { margin-top: 2px; }
+.projlist { margin: 4px 0 6px; display: grid; gap: 2px; }
+.projrow { display: grid; grid-template-columns: minmax(0, 1.4fr) 1fr auto; gap: 8px; align-items: center; font-variant-numeric: tabular-nums; }
+.projrow .pname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); }
+.projrow.current .pname { color: var(--vscode-foreground); font-weight: 600; }
+.projrow .pbar { display: block; height: 4px; border-radius: 2px; overflow: hidden; background: var(--vscode-editorWidget-border, rgba(128,128,128,.25)); }
+.projrow .pbar .fill { display: block; }
+.projrow .v { text-align: right; min-width: 44px; }
+.live { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; background: var(--vscode-charts-green, #89d185); }

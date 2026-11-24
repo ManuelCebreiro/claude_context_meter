@@ -89,6 +89,11 @@ async function tickOnce() {
     // Sin el plan B no podemos saber si la sesión actual (de una subcarpeta) sigue siendo la buena
     else if (!f && live && fallback) live = null;
   }
+  // Proyecto abierto para el reparto del bloque: carpetas de la ventana + la del chat activo
+  const dirs = new Set(workspacePaths().map(p => P.encodeProjectDir(p).toLowerCase()));
+  if (live) dirs.add(path.basename(path.dirname(live.file)).toLowerCase());
+  const lb = getLiveBlocks();
+  if (!lb.projectDirs || [...dirs].sort().join() !== [...lb.projectDirs].sort().join()) { lb.projectDirs = dirs; showBlocks(true); }
   const L = live;
   if (!L) { render(null); return; }
   const r = await L.reader.poll();
@@ -351,13 +356,43 @@ function slimLive(s) {
   };
 }
 
+// Nombre legible de cada proyecto: la última carpeta de su cwd (se lee una vez, en segundo plano)
+const projectNames = new Map();
+function projectName(proj) {
+  const n = projectNames.get(proj);
+  if (n) return n;
+  const file = liveBlocks && liveBlocks.store.projectFiles.get(proj);
+  if (file && !projectNames.has(proj)) {
+    projectNames.set(proj, null); // en curso
+    P.readCwd(file).then((cwd) => {
+      if (cwd) { projectNames.set(proj, cwd.split(/[\\/]/).filter(Boolean).pop() || cwd); updateView(); }
+      else projectNames.delete(proj);
+    }).catch(() => projectNames.delete(proj));
+  }
+  return proj; // mientras tanto, el nombre de la carpeta de ~/.claude/projects
+}
+
+function slimBlock(b) {
+  if (!b) return null;
+  const { projects, models, ...rest } = b;
+  const dirs = liveBlocks && liveBlocks.projectDirs;
+  return {
+    ...rest,
+    projects: (projects || []).slice(0, 6).map(p => ({
+      name: projectName(p.proj), current: !!(dirs && dirs.has(p.proj)),
+      freshTokens: p.freshTokens, tokens: p.tokens, calls: p.calls, recentFresh: p.recentFresh,
+    })),
+    otherProjects: Math.max(0, (projects || []).length - 6),
+  };
+}
+
 function updateView() {
   if (!view || !view.visible) return;
   const max = personalMax();
   view.webview.postMessage({
     type: 'state',
     live: slimLive(viewLive),
-    block: lastBlock,
+    block: slimBlock(lastBlock),
     official: officialState(),
     max: max ? { freshTokens: max.freshTokens, start: max.start } : null,
     scanDone: blockScanDone,

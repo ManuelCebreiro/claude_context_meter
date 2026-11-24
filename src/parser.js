@@ -450,6 +450,6 @@ async function readClaudeEnv(workspacePaths) {
 module.exports = {
   readClaudeEnv, readOfficialUsage, parseOfficialUsage,
   PROJECTS_DIR, SessionState, IncrementalReader, parseSessionFile, listSessionFiles,
-  findActiveSession, subagentFiles, feedSubagentFile, feedSubagentLine, readWholeFile, contextWindowFor, callCost, usageTotal,
+  findActiveSession, readCwd, subagentFiles, feedSubagentFile, feedSubagentLine, readWholeFile, contextWindowFor, callCost, usageTotal,
   contextOf, freshOf, encodeProjectDir, normPath, readUsage,
 };

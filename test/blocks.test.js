@@ -181,3 +181,20 @@ test('LiveBlocks: si el reinicio oficial ya pasó, la ventana empieza con la pri
   assert.equal(cur.freshTokens, 16);
   assert.equal(cur.alignedToOfficial, true);
 });
+
+test('LiveBlocks: reparte la ventana por proyecto y separa el proyecto abierto', async (t) => {
+  const root = tmpDir(t);
+  const now = Date.now();
+  writeLines(path.join(root, 'c--Proyecto-A', 'a.jsonl'), [assistantLine('a1', now - 40 * 60000, { input: 100 })]);
+  writeLines(path.join(root, 'c--Proyecto-A', 'a', 'subagents', 'agent.jsonl'), [assistantLine('a2', now - 35 * 60000, { output: 50 })]);
+  writeLines(path.join(root, 'c--Proyecto-B', 'b.jsonl'), [assistantLine('b1', now - 5 * 60000, { input: 300, cacheRead: 9000 })]);
+  const lb = new B.LiveBlocks(null, root);
+  await lb.poll(now, true);
+  lb.projectDirs = new Set(['c--proyecto-a']);
+  const cur = lb.current(now);
+  assert.deepEqual(cur.projects.map(p => [p.proj, p.freshTokens]), [['c--proyecto-b', 300], ['c--proyecto-a', 150]]);
+  assert.equal(cur.currentProject.freshTokens, 150, 'el proyecto abierto incluye sus subagentes');
+  assert.equal(cur.currentProject.recentFresh, 0, 'sin actividad en los últimos 30 min');
+  assert.equal(cur.projects[0].recentFresh, 300, 'B está trabajando ahora');
+  assert.equal(cur.freshTokens, 450, 'el total sigue siendo de todos los proyectos');
+});

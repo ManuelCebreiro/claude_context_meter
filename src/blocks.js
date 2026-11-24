@@ -92,13 +92,22 @@ class CallStore {
     this.models = new Map();    // para no guardar el mismo nombre de modelo miles de veces
     this.keepSince = 0;         // las llamadas anteriores se descartan
     this.version = 0;           // cambia cada vez que cambian las llamadas
+    this.projectFiles = new Map(); // proyecto -> un transcript suyo (para averiguar su nombre)
   }
 
-  _onLine(line) {
+  // Carpeta del proyecto (la de ~/.claude/projects) a la que pertenece un transcript,
+  // también para los de subagentes (<proyecto>/<sesión>/subagents/…). En minúsculas.
+  projectOf(file) {
+    return path.relative(this.root, file).split(/[\\/]/)[0].toLowerCase();
+  }
+
+  _onLine(line, proj, file) {
     const c = callFromLine(line);
     if (!c || c.ts < this.keepSince) return;
     const m = this.models.get(c.model);
     if (m === undefined) this.models.set(c.model, c.model); else c.model = m;
+    c.proj = proj;
+    if (!this.projectFiles.has(proj)) this.projectFiles.set(proj, file);
     this.calls.set(c.id, c);
     this.version++;
   }
@@ -108,7 +117,11 @@ class CallStore {
     let changed = false;
     for (const file of files) {
       let r = this.readers.get(file);
-      if (!r) { r = new P.IncrementalReader(file, (l) => this._onLine(l)); this.readers.set(file, r); }
+      if (!r) {
+        const proj = this.projectOf(file);
+        r = new P.IncrementalReader(file, (l) => this._onLine(l, proj, file));
+        this.readers.set(file, r);
+      }
       let res = await r.poll();
       if (res === 'reset') res = await r.poll(); // las llamadas repetidas se deduplican por id
       if (res) changed = true;
@@ -148,6 +161,7 @@ class LiveBlocks {
     this.lastPoll = 0;
     this.lastList = 0;
     this.recentFiles = [];
+    this.projectDirs = null;    // Set con las carpetas (de ~/.claude/projects, en minúsculas) del proyecto abierto
     this._cache = null;
   }
 
@@ -169,7 +183,8 @@ class LiveBlocks {
   }
 
   current(now = Date.now()) {
-    const key = `${this.store.version}|${this.anchor}|${this.officialReset}|${Math.floor(now / 60000)}`;
+    const dirs = this.projectDirs ? [...this.projectDirs].sort().join(',') : '';
+    const key = `${this.store.version}|${this.anchor}|${this.officialReset}|${dirs}|${Math.floor(now / 60000)}`;
     if (this._cache && this._cache.key === key && this._cache.pricing === this.pricing) return this._cache.value;
     const value = this._compute(now);
     this._cache = { key, pricing: this.pricing, value };
@@ -199,10 +214,35 @@ class LiveBlocks {
     }
     const perMin = recent / 30, perMinFresh = recentFresh / 30;
     const minsLeft = Math.max(0, (b.end - now) / 60000);
+    // Reparto por proyecto dentro de la ventana: el límite cuenta todos, pero interesa
+    // saber cuánto lleva el proyecto abierto y qué otros están gastando
+    const byProj = new Map();
+    for (const c of calls) {
+      if (c.ts < b.start || c.ts >= b.end) continue;
+      const k = c.proj || '?';
+      const p = byProj.get(k) || { proj: k, freshTokens: 0, tokens: 0, calls: 0, cost: 0, recentFresh: 0 };
+      p.freshTokens += P.freshOf(c.usage);
+      p.tokens += P.usageTotal(c.usage);
+      p.cost += P.callCost(c.model, c.usage, this.pricing);
+      p.calls++;
+      if (c.ts >= now - 30 * 60000) p.recentFresh += P.freshOf(c.usage);
+      byProj.set(k, p);
+    }
+    const projects = [...byProj.values()].sort((a, b2) => b2.freshTokens - a.freshTokens);
+    let current = null;
+    if (this.projectDirs) {
+      current = { freshTokens: 0, tokens: 0, calls: 0, cost: 0, recentFresh: 0 };
+      for (const p of projects) if (this.projectDirs.has(p.proj)) {
+        for (const k of Object.keys(current)) current[k] += p[k];
+      }
+      current.perMinFresh = current.recentFresh / 30;
+    }
     return {
       ...b, minsLeft,
       perMin, projected: b.tokens + perMin * minsLeft,
       perMinFresh, projectedFresh: b.freshTokens + perMinFresh * minsLeft,
+      projects,            // [{ proj, freshTokens, tokens, calls, cost, recentFresh }] de mayor a menor
+      currentProject: current,
     };
   }
 }
