@@ -4,26 +4,30 @@
 // Un bloque empieza en la primera llamada (redondeada a la hora) y dura 5 h;
 // la siguiente llamada fuera de ese rango abre un bloque nuevo.
 // Es una estimación local: Anthropic no expone el % oficial del límite en los archivos.
-const fs = require('fs');
+const fsp = require('fs').promises;
 const path = require('path');
 const P = require('./parser');
 
 const H5 = 5 * 3600 * 1000;
+const LIVE_WINDOW = 2 * H5;     // archivos que el bloque en vivo relee cada 10 s
+const LIVE_POLL_MS = 10_000;
+const LIVE_LIST_MS = 60_000;    // cada cuánto se buscan transcripts nuevos
 
-function allTranscripts(root = P.PROJECTS_DIR, minMtime = 0) {
+// Lista los .jsonl (también los de subagentes) modificados desde `minMtime`. Asíncrono.
+async function listTranscripts(root = P.PROJECTS_DIR, minMtime = 0) {
   const out = [];
-  const walk = (dir, depth) => {
+  const walk = async (dir, depth) => {
     let ents;
-    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of ents) {
+    try { ents = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
+    await Promise.all(ents.map(async (e) => {
       const full = path.join(dir, e.name);
-      if (e.isDirectory()) { if (depth < 3) walk(full, depth + 1); }
+      if (e.isDirectory()) { if (depth < 3) await walk(full, depth + 1); }
       else if (e.name.endsWith('.jsonl')) {
-        try { const st = fs.statSync(full); if (st.mtimeMs >= minMtime) out.push({ file: full, mtime: st.mtimeMs, size: st.size }); } catch {}
+        try { const st = await fsp.stat(full); if (st.mtimeMs >= minMtime) out.push({ file: full, mtime: st.mtimeMs, size: st.size }); } catch {}
       }
-    }
+    }));
   };
-  walk(root, 0);
+  await walk(root, 0);
   return out;
 }
 
@@ -70,40 +74,110 @@ function buildBlocks(calls, pricing, anchor) {
   return blocks;
 }
 
-// Mantiene en memoria las llamadas de las últimas horas, leyendo solo lo nuevo de cada archivo
-class LiveBlocks {
-  constructor(pricing, root = P.PROJECTS_DIR) {
-    this.pricing = pricing;
+// Todas las llamadas conocidas, deduplicadas por id, con un lector incremental por archivo.
+// Cada archivo se lee una sola vez; después solo se leen los bytes nuevos.
+class CallStore {
+  constructor(root = P.PROJECTS_DIR) {
     this.root = root;
     this.readers = new Map();   // file -> IncrementalReader
     this.calls = new Map();     // id -> call
-    this.lastScan = 0;
-    this.anchor = null;         // inicio del último bloque según el escaneo completo
+    this.models = new Map();    // para no guardar el mismo nombre de modelo miles de veces
+    this.keepSince = 0;         // las llamadas anteriores se descartan
+    this.version = 0;           // cambia cada vez que cambian las llamadas
   }
-  poll(now = Date.now(), force = false) {
-    if (!force && now - this.lastScan < 10000) return false;
-    this.lastScan = now;
+
+  _onLine(line) {
+    const c = callFromLine(line);
+    if (!c || c.ts < this.keepSince) return;
+    const m = this.models.get(c.model);
+    if (m === undefined) this.models.set(c.model, c.model); else c.model = m;
+    this.calls.set(c.id, c);
+    this.version++;
+  }
+
+  // Lee lo nuevo de cada archivo. Devuelve true si cambió algo.
+  async pollFiles(files) {
     let changed = false;
-    for (const f of allTranscripts(this.root, now - H5 * 2)) {
-      if (!this.readers.has(f.file)) {
-        this.readers.set(f.file, new P.IncrementalReader(f.file, (line) => {
-          const c = callFromLine(line);
-          if (c && c.ts >= now - H5 * 2) { this.calls.set(c.id, c); }
-        }));
-      }
-      if (this.readers.get(f.file).poll()) changed = true;
+    for (const file of files) {
+      let r = this.readers.get(file);
+      if (!r) { r = new P.IncrementalReader(file, (l) => this._onLine(l)); this.readers.set(file, r); }
+      let res = await r.poll();
+      if (res === 'reset') res = await r.poll(); // las llamadas repetidas se deduplican por id
+      if (res) changed = true;
     }
-    const cutoff = now - H5 * 2;
-    for (const [k, c] of this.calls) if (c.ts < cutoff) { this.calls.delete(k); changed = true; }
     return changed;
   }
+
+  // Lista los archivos modificados desde `sinceMs`, los lee y descarta lo anterior.
+  async sync(sinceMs) {
+    this.keepSince = sinceMs;
+    const files = await listTranscripts(this.root, sinceMs);
+    const listed = new Set(files.map(f => f.file));
+    // Un lector de un archivo que ya no aparece se puede soltar: si el archivo vuelve a
+    // cambiar, se relee entero y los duplicados se descartan por id.
+    for (const f of this.readers.keys()) if (!listed.has(f)) this.readers.delete(f);
+    let changed = await this.pollFiles(files.map(f => f.file));
+    for (const [k, c] of this.calls) if (c.ts < sinceMs) { this.calls.delete(k); changed = true; }
+    if (changed) this.version++;
+    return changed;
+  }
+
+  callsSince(ms) {
+    const out = [];
+    for (const c of this.calls.values()) if (c.ts >= ms) out.push(c);
+    return out;
+  }
+}
+
+// Bloque actual en vivo. Comparte el almacén con el escaneo completo (scanAll), así
+// que el escaneo de 90 días solo lee lo que ha cambiado desde la vez anterior.
+class LiveBlocks {
+  constructor(pricing, root = P.PROJECTS_DIR) {
+    this.pricing = pricing;
+    this.store = new CallStore(root);
+    this.anchor = null;         // inicio del último bloque según el escaneo completo
+    this.lastPoll = 0;
+    this.lastList = 0;
+    this.recentFiles = [];
+    this._cache = null;
+  }
+
+  // Lee lo nuevo de los transcripts recientes (como mucho cada 10 s; cada 60 s busca archivos nuevos)
+  async poll(now = Date.now(), force = false) {
+    if (!force && now - this.lastPoll < LIVE_POLL_MS) return false;
+    this.lastPoll = now;
+    if (force || now - this.lastList >= LIVE_LIST_MS) {
+      this.lastList = now;
+      this.recentFiles = (await listTranscripts(this.store.root, now - LIVE_WINDOW)).map(f => f.file);
+    }
+    return this.store.pollFiles(this.recentFiles);
+  }
+
+  // Escaneo completo: lee lo que falte de los últimos `sinceMs` y devuelve todos los bloques
+  async scanAll(sinceMs) {
+    await this.store.sync(sinceMs);
+    return buildBlocks(this.store.calls.values(), this.pricing);
+  }
+
   current(now = Date.now()) {
-    const blocks = buildBlocks(this.calls.values(), this.pricing, this.anchor);
+    const key = `${this.store.version}|${this.anchor}|${Math.floor(now / 60000)}`;
+    if (this._cache && this._cache.key === key && this._cache.pricing === this.pricing) return this._cache.value;
+    const value = this._compute(now);
+    this._cache = { key, pricing: this.pricing, value };
+    return value;
+  }
+
+  _compute(now) {
+    // Con ancla, el bloque se reconstruye desde ella; sin ancla (antes del primer
+    // escaneo completo) se usa la ventana de las últimas 10 h.
+    const from = this.anchor != null ? this.anchor : now - LIVE_WINDOW;
+    const calls = this.store.callsSince(Math.min(from, now - 30 * 60000));
+    const blocks = buildBlocks(calls, this.pricing, this.anchor != null ? this.anchor : undefined);
     const b = blocks[blocks.length - 1];
     if (!b || now >= b.end) return null;
     // Ritmo: tokens de los últimos 30 min (total y sin caché leída)
     let recent = 0, recentFresh = 0;
-    for (const c of this.calls.values()) if (c.ts >= now - 30 * 60000 && c.ts >= b.start) {
+    for (const c of calls) if (c.ts >= now - 30 * 60000 && c.ts >= b.start) {
       recent += P.usageTotal(c.usage);
       recentFresh += P.freshOf(c.usage);
     }
@@ -117,21 +191,11 @@ class LiveBlocks {
   }
 }
 
-// Escaneo completo (en segundo plano) para el histórico de bloques y tu máximo
+// Escaneo completo de una sola vez (sin reutilizar lectores entre llamadas)
 async function scanAllBlocks(pricing, sinceMs, root = P.PROJECTS_DIR) {
-  const calls = new Map();
-  const files = allTranscripts(root, sinceMs || 0);
-  let i = 0;
-  for (const f of files) {
-    let text;
-    try { text = fs.readFileSync(f.file, 'utf8'); } catch { continue; }
-    for (const line of text.split('\n')) {
-      const c = callFromLine(line.trim());
-      if (c && (!sinceMs || c.ts >= sinceMs)) calls.set(c.id, c);
-    }
-    if (++i % 10 === 0) await new Promise(r => setImmediate(r));
-  }
-  return buildBlocks(calls.values(), pricing);
+  const store = new CallStore(root);
+  await store.sync(sinceMs || 0);
+  return buildBlocks(store.calls.values(), pricing);
 }
 
-module.exports = { LiveBlocks, scanAllBlocks, buildBlocks, callFromLine, H5 };
+module.exports = { LiveBlocks, CallStore, scanAllBlocks, buildBlocks, callFromLine, listTranscripts, H5 };

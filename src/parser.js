@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const fsp = fs.promises;
 const { StringDecoder } = require('string_decoder');
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
@@ -225,28 +226,63 @@ class SessionState {
 }
 
 // ── Lectura incremental (no pierde líneas a medio escribir) ─────────────────
+// Asíncrona y por trozos de 1 MB: un transcript de 50 MB ya no bloquea VS Code
+// mientras se lee (cada `await` devuelve el control al resto de extensiones).
 // StringDecoder guarda los bytes de un carácter UTF-8 cortado entre dos lecturas.
+const CHUNK = 1 << 20;
+
 class IncrementalReader {
-  constructor(file, onLine) { this.file = file; this.onLine = onLine; this.offset = 0; this.rest = ''; this.decoder = new StringDecoder('utf8'); }
-  poll() {
-    let fd;
-    try {
-      const st = fs.statSync(this.file);
-      if (st.size < this.offset) { this.offset = 0; this.rest = ''; this.decoder = new StringDecoder('utf8'); return 'reset'; }
-      if (st.size === this.offset) return false;
-      fd = fs.openSync(this.file, 'r');
-      const len = st.size - this.offset;
-      const buf = Buffer.alloc(len);
-      const n = fs.readSync(fd, buf, 0, len, this.offset);
-      this.offset += n;
-      const text = this.rest + this.decoder.write(buf.subarray(0, n));
-      const lines = text.split('\n');
-      this.rest = lines.pop(); // la última puede estar incompleta
-      for (const l of lines) this.onLine(l.trim());
-      return true;
-    } catch { return false; }
-    finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {} }
+  constructor(file, onLine) {
+    this.file = file; this.onLine = onLine;
+    this.offset = 0; this.rest = ''; this.decoder = new StringDecoder('utf8');
+    this.busy = false;
   }
+
+  // Devuelve true si leyó bytes nuevos, false si no (o si ya hay una lectura en curso)
+  // y 'reset' si el archivo se ha acortado (hay que volver a leerlo desde el principio).
+  async poll() {
+    if (this.busy) return false;
+    this.busy = true;
+    let fh;
+    try {
+      const st = await fsp.stat(this.file);
+      if (st.size < this.offset) {
+        this.offset = 0; this.rest = ''; this.decoder = new StringDecoder('utf8');
+        return 'reset';
+      }
+      if (st.size === this.offset) return false;
+      fh = await fsp.open(this.file, 'r');
+      const buf = Buffer.allocUnsafe(Math.min(CHUNK, st.size - this.offset));
+      let read = false;
+      while (this.offset < st.size) {
+        const { bytesRead } = await fh.read(buf, 0, Math.min(buf.length, st.size - this.offset), this.offset);
+        if (!bytesRead) break;
+        this.offset += bytesRead;
+        read = true;
+        const lines = (this.rest + this.decoder.write(buf.subarray(0, bytesRead))).split('\n');
+        this.rest = lines.pop(); // la última puede estar incompleta
+        for (const l of lines) this.onLine(l.trim());
+      }
+      return read;
+    } catch { return false; }
+    finally {
+      if (fh) await fh.close().catch(() => {});
+      this.busy = false;
+    }
+  }
+
+  // Para lecturas de una sola vez: entrega también la última línea aunque no acabe en \n
+  flush() {
+    const last = (this.rest + this.decoder.end()).trim();
+    this.rest = '';
+    if (last) this.onLine(last);
+  }
+}
+
+async function readWholeFile(file, onLine) {
+  const r = new IncrementalReader(file, onLine);
+  await r.poll();
+  r.flush();
 }
 
 function subagentFiles(sessionFile) {
@@ -255,41 +291,43 @@ function subagentFiles(sessionFile) {
   catch { return []; }
 }
 
-function feedSubagentFile(state, file) {
-  let text;
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return; }
-  for (const line of text.split('\n')) {
-    if (!line || line.charCodeAt(0) !== 123) continue;
-    let e; try { e = JSON.parse(line); } catch { continue; }
-    if (e.type !== 'assistant' || !e.message || !e.message.usage || e.message.model === '<synthetic>') continue;
-    state.feedSubagentCall('sub:' + (e.message.id || e.uuid), e.message.model, readUsage(e.message.usage), e.timestamp);
-  }
+// Una línea de un archivo de subagente → llamada en la sesión
+function feedSubagentLine(state, line) {
+  if (!line || line.charCodeAt(0) !== 123) return;
+  let e; try { e = JSON.parse(line); } catch { return; }
+  if (e.type !== 'assistant' || !e.message || !e.message.usage || e.message.model === '<synthetic>') return;
+  state.feedSubagentCall('sub:' + (e.message.id || e.uuid), e.message.model, readUsage(e.message.usage), e.timestamp);
 }
 
-function parseSessionFile(file, pricing, contextWindowSetting, env) {
+function feedSubagentFile(state, file) {
+  return readWholeFile(file, (line) => feedSubagentLine(state, line));
+}
+
+async function parseSessionFile(file, pricing, contextWindowSetting, env) {
   const st = new SessionState(file, pricing);
-  const text = fs.readFileSync(file, 'utf8');
-  for (const line of text.split('\n')) st.feedLine(line.trim());
-  for (const sf of subagentFiles(file)) feedSubagentFile(st, sf);
+  await readWholeFile(file, (line) => st.feedLine(line));
+  for (const sf of subagentFiles(file)) await feedSubagentFile(st, sf);
   return st.summary(contextWindowSetting, env);
+}
+
+function jsonlFilesIn(dir, projectDir) {
+  const out = [];
+  let files;
+  try { files = fs.readdirSync(dir); } catch { return out; }
+  for (const f of files) {
+    if (!f.endsWith('.jsonl')) continue;
+    const full = path.join(dir, f);
+    try { const s = fs.statSync(full); out.push({ file: full, size: s.size, mtime: s.mtimeMs, projectDir }); } catch {}
+  }
+  return out;
 }
 
 // Lista todos los transcripts principales (no subagentes)
 function listSessionFiles(root = PROJECTS_DIR) {
-  const out = [];
   let dirs;
-  try { dirs = fs.readdirSync(root, { withFileTypes: true }); } catch { return out; }
-  for (const d of dirs) {
-    if (!d.isDirectory()) continue;
-    const pdir = path.join(root, d.name);
-    let files;
-    try { files = fs.readdirSync(pdir); } catch { continue; }
-    for (const f of files) {
-      if (!f.endsWith('.jsonl')) continue;
-      const full = path.join(pdir, f);
-      try { const s = fs.statSync(full); out.push({ file: full, size: s.size, mtime: s.mtimeMs, projectDir: d.name }); } catch {}
-    }
-  }
+  try { dirs = fs.readdirSync(root, { withFileTypes: true }); } catch { return []; }
+  const out = [];
+  for (const d of dirs) if (d.isDirectory()) out.push(...jsonlFilesIn(path.join(root, d.name), d.name));
   return out;
 }
 
@@ -303,7 +341,12 @@ function normPath(p) {
   return n;
 }
 
+// El cwd de un transcript no cambia: se lee una vez (primeros 64 KB) y se guarda.
+// Solo se guardan resultados positivos: un archivo recién creado puede no tenerlo aún.
+const cwdCache = new Map();
 function readCwd(file) {
+  const hit = cwdCache.get(file);
+  if (hit) return hit;
   let fd;
   try {
     fd = fs.openSync(file, 'r');
@@ -311,26 +354,33 @@ function readCwd(file) {
     const n = fs.readSync(fd, buf, 0, buf.length, 0);
     for (const line of buf.subarray(0, n).toString('utf8').split('\n')) {
       if (!line.startsWith('{')) continue;
-      try { const e = JSON.parse(line); if (e.cwd) return e.cwd; } catch {}
+      try {
+        const e = JSON.parse(line);
+        if (e.cwd) { cwdCache.set(file, e.cwd); return e.cwd; }
+      } catch {}
     }
   } catch {} finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {} }
   return null;
 }
 
-// Sesión activa: el transcript modificado más recientemente del proyecto abierto
-function findActiveSession(workspacePaths, root = PROJECTS_DIR) {
-  const all = listSessionFiles(root);
+// Sesión activa: el transcript modificado más recientemente del proyecto abierto.
+// Plan A: solo mira las carpetas de ~/.claude/projects que corresponden a las carpetas
+// abiertas. Plan B (más caro, `fallback`): revisa los archivos más recientes de todos
+// los proyectos, para sesiones abiertas en una subcarpeta.
+function findActiveSession(workspacePaths, root = PROJECTS_DIR, { fallback = true } = {}) {
   const wanted = workspacePaths.map(normPath);
-  const encoded = new Set(workspacePaths.map(p => encodeProjectDir(p).toLowerCase()));
-  const candidates = all
-    .filter(f => encoded.has(f.projectDir.toLowerCase()) || wanted.length === 0)
-    .sort((a, b) => b.mtime - a.mtime);
+  if (wanted.length === 0) {
+    const all = listSessionFiles(root).sort((a, b) => b.mtime - a.mtime);
+    return all.length ? all[0].file : null;
+  }
+  const dirs = [...new Set(workspacePaths.map(encodeProjectDir))];
+  const candidates = dirs.flatMap(d => jsonlFilesIn(path.join(root, d), d)).sort((a, b) => b.mtime - a.mtime);
   for (const c of candidates) {
     const cwd = readCwd(c.file);
-    if (!cwd || wanted.length === 0 || wanted.includes(normPath(cwd))) return c.file;
+    if (!cwd || wanted.includes(normPath(cwd))) return c.file;
   }
-  // Plan B: comprobar el cwd de los archivos más recientes de cualquier proyecto
-  const recent = all.sort((a, b) => b.mtime - a.mtime).slice(0, 40);
+  if (!fallback) return null;
+  const recent = listSessionFiles(root).sort((a, b) => b.mtime - a.mtime).slice(0, 40);
   for (const c of recent) {
     const cwd = readCwd(c.file);
     if (cwd && wanted.some(w => normPath(cwd) === w || normPath(cwd).startsWith(w + path.sep))) return c.file;
@@ -360,6 +410,6 @@ function readClaudeEnv(workspacePaths) {
 module.exports = {
   readClaudeEnv,
   PROJECTS_DIR, SessionState, IncrementalReader, parseSessionFile, listSessionFiles,
-  findActiveSession, subagentFiles, feedSubagentFile, contextWindowFor, callCost, usageTotal,
+  findActiveSession, subagentFiles, feedSubagentFile, feedSubagentLine, readWholeFile, contextWindowFor, callCost, usageTotal,
   contextOf, freshOf, encodeProjectDir, normPath, readUsage,
 };

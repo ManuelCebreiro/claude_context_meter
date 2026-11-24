@@ -1,6 +1,6 @@
 'use strict';
 const vscode = require('vscode');
-const fs = require('fs');
+const fsp = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 const P = require('./parser');
@@ -43,42 +43,50 @@ function attachLive(file) {
   live = { file, state, reader: new P.IncrementalReader(file, l => state.feedLine(l)), subReaders: new Map() };
 }
 
-function pollSubagents() {
-  for (const sf of P.subagentFiles(live.file)) {
-    if (!live.subReaders.has(sf)) {
-      live.subReaders.set(sf, new P.IncrementalReader(sf, (line) => {
-        if (!line.startsWith('{')) return;
-        let e; try { e = JSON.parse(line); } catch { return; }
-        if (e.type !== 'assistant' || !e.message || !e.message.usage || e.message.model === '<synthetic>') return;
-        live.state.feedSubagentCall('sub:' + (e.message.id || e.uuid), e.message.model, P.readUsage(e.message.usage), e.timestamp);
-      }));
-    }
+async function pollSubagents(L) {
+  for (const sf of P.subagentFiles(L.file)) {
+    if (!L.subReaders.has(sf)) L.subReaders.set(sf, new P.IncrementalReader(sf, (line) => P.feedSubagentLine(L.state, line)));
   }
   let changed = false;
-  for (const r of live.subReaders.values()) if (r.poll()) changed = true;
+  for (const r of L.subReaders.values()) if (await r.poll()) changed = true;
   return changed;
 }
 
-function tick() {
+// Un tick a la vez: si una lectura grande tarda más que pollMs, el siguiente se salta.
+let ticking = false;
+let lastFallback = 0;
+async function tick() {
+  if (ticking) return;
+  ticking = true;
+  try { await tickOnce(); } catch (e) { console.error('claudeMeter', e); } finally { ticking = false; }
+}
+
+async function tickOnce() {
   const now = Date.now();
   if (now - lastEnvRead > 15000) {
     lastEnvRead = now;
     const e = P.readClaudeEnv(workspacePaths());
     if (e.disable1m !== claudeEnv.disable1m || e.model1m !== claudeEnv.model1m) { claudeEnv = e; lastSummary = null; }
   }
-  try { tickBlocks(now); } catch (e) { console.error('claudeMeter blocks', e); }
+  pollBlocks(now);
   if (!live || now - lastActiveCheck > 4000) {
     lastActiveCheck = now;
-    const f = P.findActiveSession(workspacePaths());
+    // El plan B (revisar todos los proyectos) solo cada 30 s
+    const fallback = now - lastFallback > 30000;
+    if (fallback) lastFallback = now;
+    const f = P.findActiveSession(workspacePaths(), undefined, { fallback });
     if (f && (!live || live.file !== f)) attachLive(f);
-    if (!f && live) live = null;
+    // Sin el plan B no podemos saber si la sesión actual (de una subcarpeta) sigue siendo la buena
+    else if (!f && live && fallback) live = null;
   }
-  if (!live) { render(null); return; }
-  let r = live.reader.poll();
-  if (r === 'reset') { attachLive(live.file); r = live.reader.poll(); }
-  const sub = pollSubagents();
-  if (r || sub || !lastSummary || lastSummary.file !== live.file) {
-    lastSummary = live.state.summary(cfg().get('contextWindow'), claudeEnv);
+  const L = live;
+  if (!L) { render(null); return; }
+  const r = await L.reader.poll();
+  if (r === 'reset') { attachLive(L.file); return; } // el siguiente tick lo vuelve a leer entero
+  const sub = await pollSubagents(L);
+  if (live !== L) return; // cambió la sesión mientras leíamos
+  if (r || sub || !lastSummary || lastSummary.file !== L.file) {
+    lastSummary = L.state.summary(cfg().get('contextWindow'), claudeEnv);
     render(lastSummary);
     if (panel) panel.webview.postMessage({ type: 'live', data: lastSummary });
   }
@@ -99,12 +107,28 @@ function personalMax() {
 const hm = (ms) => new Date(ms).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
 function dur(mins) { const h = Math.floor(mins / 60), m = Math.round(mins % 60); return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`; }
 
-function tickBlocks(now) {
+function getLiveBlocks() {
   if (!liveBlocks) liveBlocks = new B.LiveBlocks(pricing());
-  const changed = liveBlocks.poll(now);
-  const b = liveBlocks.current(now);
+  return liveBlocks;
+}
+
+// Lee lo nuevo de los transcripts recientes y repinta si cambió algo
+let blocksPolling = false;
+async function pollBlocks(now, force = false) {
+  if (blocksPolling) return;
+  blocksPolling = true;
+  try {
+    const changed = await getLiveBlocks().poll(now, force);
+    showBlocks(changed);
+  } catch (e) { console.error('claudeMeter blocks', e); }
+  finally { blocksPolling = false; }
+}
+
+// Pinta el bloque actual (sin leer archivos). `force`: repintar aunque no haya cambiado.
+function showBlocks(force = false) {
+  const b = getLiveBlocks().current(Date.now());
   const key = b ? `${b.start}|${b.tokens}|${b.freshTokens}|${Math.floor(b.minsLeft)}` : 'none';
-  if (!changed && key === lastBlockKey) return;
+  if (!force && key === lastBlockKey) return;
   lastBlockKey = key;
   renderBlock(b);
   if (panel) panel.webview.postMessage({ type: 'blocks', current: b, past: pastBlocks.slice(-30), max: personalMax() });
@@ -145,17 +169,26 @@ function renderBlock(b) {
   blkItem.show();
 }
 
+// Escribe en un .tmp y renombra: si VS Code se cierra a medias, el archivo anterior sigue entero
+async function writeJsonAtomic(file, data) {
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  const tmp = file + '.tmp';
+  await fsp.writeFile(tmp, JSON.stringify(data));
+  await fsp.rename(tmp, file);
+}
+
 let blockScanRunning = false, blockScanAgain = false;
 async function scanBlocksBackground() {
   if (blockScanRunning) { blockScanAgain = true; return; }
   blockScanRunning = true;
   try {
     const since = Date.now() - 90 * 24 * 3600 * 1000;
-    const all = await B.scanAllBlocks(pricing(), since);
+    // Incremental: el almacén de LiveBlocks ya tiene leído todo lo anterior
+    const all = await getLiveBlocks().scanAll(since);
     // fusionar con los guardados (sobreviven a la limpieza de transcripts)
     const file = path.join(ctxRef.globalStorageUri.fsPath, 'blocks.json');
     let saved = [];
-    try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+    try { saved = JSON.parse(await fsp.readFile(file, 'utf8')); } catch {}
     const now = Date.now();
     const byStart = new Map(saved.map(b => [b.start, b]));
     for (const b of all) if (b.end <= now) {
@@ -168,17 +201,12 @@ async function scanBlocksBackground() {
     // Ancla para el bloque en vivo: el inicio del bloque más reciente conocido
     let anchor = null;
     for (const b of all.concat(pastBlocks)) if (b.start <= now && (anchor == null || b.start > anchor)) anchor = b.start;
-    if (!liveBlocks) liveBlocks = new B.LiveBlocks(pricing());
-    liveBlocks.anchor = anchor;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = file + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(pastBlocks));
-    fs.renameSync(tmp, file);
+    getLiveBlocks().anchor = anchor;
+    await writeJsonAtomic(file, pastBlocks);
   } catch (e) { console.error('claudeMeter: escaneo de bloques', e); }
   finally { blockScanRunning = false; }
   blockScanDone = true;
-  lastBlockKey = '';
-  tickBlocks(Date.now());
+  showBlocks(true);
   if (blockScanAgain) { blockScanAgain = false; scanBlocksBackground(); }
 }
 
@@ -232,20 +260,25 @@ function render(s) {
 // ── Histórico (archivo propio, sobrevive a la limpieza de 30 días de Claude) ─
 function historyFile() { return path.join(ctxRef.globalStorageUri.fsPath, 'history.json'); }
 
+// Se lee una sola vez (de forma asíncrona: puede ocupar varios MB) y se queda en memoria
+let historyLoading = null;
 function loadHistory() {
-  if (history) return history;
-  try { history = JSON.parse(fs.readFileSync(historyFile(), 'utf8')); } catch { history = null; }
-  if (!history || history.version !== 2) history = { version: 2, sessions: {} };
-  return history;
+  if (history) return Promise.resolve(history);
+  if (!historyLoading) {
+    historyLoading = (async () => {
+      let h = null;
+      try { h = JSON.parse(await fsp.readFile(historyFile(), 'utf8')); } catch {}
+      if (!h || h.version !== 2) h = { version: 2, sessions: {} };
+      history = h;
+      return h;
+    })();
+  }
+  return historyLoading;
 }
 
-function saveHistory() {
-  try {
-    fs.mkdirSync(path.dirname(historyFile()), { recursive: true });
-    const tmp = historyFile() + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(history));
-    fs.renameSync(tmp, historyFile());
-  } catch (e) { console.error('claudeMeter: no se pudo guardar el histórico', e); }
+async function saveHistory() {
+  try { await writeJsonAtomic(historyFile(), history); }
+  catch (e) { console.error('claudeMeter: no se pudo guardar el histórico', e); }
 }
 
 function compact(s) {
@@ -256,7 +289,7 @@ async function scanHistory(progress) {
   if (scanning) return;
   scanning = true;
   try {
-    const h = loadHistory();
+    const h = await loadHistory();
     const files = P.listSessionFiles();
     const present = new Set(files.map(f => f.file));
     const prices = pricing();
@@ -265,21 +298,19 @@ async function scanHistory(progress) {
     let i = 0;
     for (const f of todo) {
       try {
-        const s = P.parseSessionFile(f.file, prices, cw, claudeEnv);
+        const s = await P.parseSessionFile(f.file, prices, cw, claudeEnv);
         if (s.apiCalls > 0 || s.prompts > 0) h.sessions[f.file] = { size: f.size, mtime: f.mtime, s: compact(s) };
       } catch {}
-      if (++i % 15 === 0) {
-        if (progress) progress(i, todo.length);
-        await new Promise(r => setImmediate(r));
-      }
+      if (++i % 5 === 0 && progress) progress(i, todo.length);
     }
     for (const k of Object.keys(h.sessions)) if (!present.has(k)) h.sessions[k].deleted = true;
-    if (todo.length) saveHistory();
+    if (todo.length) await saveHistory();
   } finally { scanning = false; }
 }
 
+// Requiere que el histórico esté cargado (await loadHistory())
 function historyPayload() {
-  const h = loadHistory();
+  const h = history || { sessions: {} };
   return Object.values(h.sessions).map(o => {
     const { perPrompt, ...rest } = o.s;
     return { ...rest, deleted: !!o.deleted };
@@ -309,13 +340,14 @@ function openPanel() {
     if (m.type === 'ready' || m.type === 'refresh') {
       panel.webview.postMessage(panelConfig());
       if (lastSummary) panel.webview.postMessage({ type: 'live', data: lastSummary });
-      lastBlockKey = '';
-      tickBlocks(Date.now());
+      showBlocks(true);
+      await loadHistory();
+      if (!panel) return;
       panel.webview.postMessage({ type: 'history', data: historyPayload(), scanning: true });
       await scanHistory((i, n) => panel && panel.webview.postMessage({ type: 'progress', i, n }));
       if (panel) panel.webview.postMessage({ type: 'history', data: historyPayload(), scanning: false });
     } else if (m.type === 'detail') {
-      const o = loadHistory().sessions[m.file];
+      const o = (await loadHistory()).sessions[m.file];
       let s = o && o.s;
       if (lastSummary && lastSummary.file === m.file) s = lastSummary;
       if (panel && s) panel.webview.postMessage({ type: 'detail', data: s });
@@ -339,16 +371,19 @@ function activate(context) {
   blkItem.command = 'claudeMeter.openPanel';
   context.subscriptions.push(ctxItem, sesItem, blkItem,
     vscode.commands.registerCommand('claudeMeter.openPanel', openPanel),
-    vscode.commands.registerCommand('claudeMeter.refresh', () => { live = null; lastSummary = null; lastBlockKey = ''; if (liveBlocks) liveBlocks.lastScan = 0; tick(); }),
+    vscode.commands.registerCommand('claudeMeter.refresh', () => {
+      live = null; lastSummary = null; lastFallback = 0;
+      tick();
+      pollBlocks(Date.now(), true);
+    }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => { live = null; lastSummary = null; tick(); }),
     vscode.workspace.onDidChangeConfiguration(e => {
       if (!e.affectsConfiguration('claudeMeter')) return;
       restartTimer();
-      if (e.affectsConfiguration('claudeMeter.priceOverrides')) applyPricing();
+      if (e.affectsConfiguration('claudeMeter.priceOverrides')) applyPricing().catch(e2 => console.error('claudeMeter', e2));
       if (live) lastSummary = live.state.summary(cfg().get('contextWindow'), claudeEnv);
       if (lastSummary) render(lastSummary);
-      lastBlockKey = '';
-      tickBlocks(Date.now());
+      showBlocks(true);
       if (panel) {
         panel.webview.postMessage(panelConfig());
         if (lastSummary) panel.webview.postMessage({ type: 'live', data: lastSummary });
@@ -367,13 +402,13 @@ function activate(context) {
 }
 
 // Aplica priceOverrides sin recargar: sesión en vivo, bloque en vivo, histórico y bloques guardados
-function applyPricing() {
+async function applyPricing() {
   const p = pricing();
   if (live) live.state.pricing = p;
   if (liveBlocks) liveBlocks.pricing = p;
   // Las sesiones cuyo transcript sigue existiendo se vuelven a leer en el próximo escaneo
   // (las borradas por Claude Code conservan el coste con el que se guardaron).
-  const h = loadHistory();
+  const h = await loadHistory();
   for (const o of Object.values(h.sessions)) if (!o.deleted) o.size = -1;
   scanBlocksBackground();
   scanHistory().then(() => {
@@ -383,7 +418,7 @@ function applyPricing() {
 
 function restartTimer() {
   clearInterval(timer);
-  timer = setInterval(() => { try { tick(); } catch (e) { console.error('claudeMeter', e); } }, Math.max(500, cfg().get('pollMs') || 1500));
+  timer = setInterval(tick, Math.max(500, cfg().get('pollMs') || 1500)); // tick() captura sus propios errores
 }
 
 function deactivate() {}

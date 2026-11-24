@@ -137,39 +137,77 @@ test('SessionState: las llamadas de subagentes se asignan a la pregunta por hora
 });
 
 // ── IncrementalReader ───────────────────────────────────────────────────────
-test('IncrementalReader: no entrega una línea hasta que está completa', (t) => {
+test('IncrementalReader: no entrega una línea hasta que está completa', async (t) => {
   const f = path.join(tmpDir(t), 'a.jsonl');
   const got = [];
   const r = new P.IncrementalReader(f, (l) => got.push(l));
   fs.writeFileSync(f, '{"a":1}\n{"b":');
-  assert.equal(r.poll(), true);
+  assert.equal(await r.poll(), true);
   assert.deepEqual(got, ['{"a":1}']);
   fs.appendFileSync(f, '2}\n');
-  r.poll();
+  await r.poll();
   assert.deepEqual(got, ['{"a":1}', '{"b":2}']);
-  assert.equal(r.poll(), false, 'sin bytes nuevos');
+  assert.equal(await r.poll(), false, 'sin bytes nuevos');
 });
 
-test('IncrementalReader: un carácter UTF-8 cortado entre dos lecturas no se rompe', (t) => {
+test('IncrementalReader: un carácter UTF-8 cortado entre dos lecturas no se rompe', async (t) => {
   const f = path.join(tmpDir(t), 'u.jsonl');
   const bytes = Buffer.from('{"t":"año 🎉"}\n', 'utf8');
   const cut = bytes.indexOf(Buffer.from('ñ', 'utf8')) + 1; // a mitad de la ñ
   const got = [];
   const r = new P.IncrementalReader(f, (l) => got.push(l));
   fs.writeFileSync(f, bytes.subarray(0, cut));
-  r.poll();
+  await r.poll();
   fs.appendFileSync(f, bytes.subarray(cut));
-  r.poll();
+  await r.poll();
   assert.deepEqual(got.map(l => JSON.parse(l).t), ['año 🎉']);
 });
 
-test('IncrementalReader: si el archivo se acorta, avisa y vuelve a empezar', (t) => {
+test('IncrementalReader: si el archivo se acorta, avisa y vuelve a empezar', async (t) => {
   const f = path.join(tmpDir(t), 'r.jsonl');
-  const r = new P.IncrementalReader(f, () => {});
+  const got = [];
+  const r = new P.IncrementalReader(f, (l) => got.push(l));
   fs.writeFileSync(f, '{"a":1}\n{"b":2}\n');
-  r.poll();
+  await r.poll();
   fs.writeFileSync(f, '{"c":3}\n');
-  assert.equal(r.poll(), 'reset');
+  assert.equal(await r.poll(), 'reset');
+  await r.poll();
+  assert.deepEqual(got, ['{"a":1}', '{"b":2}', '{"c":3}']);
+});
+
+test('IncrementalReader: lee por trozos archivos de más de 1 MB sin perder líneas', async (t) => {
+  const f = path.join(tmpDir(t), 'big.jsonl');
+  const lines = [];
+  for (let i = 0; i < 30_000; i++) lines.push(JSON.stringify({ i, pad: 'ñ'.repeat(30) }));
+  fs.writeFileSync(f, lines.join('\n') + '\n');
+  assert.ok(fs.statSync(f).size > 2 * (1 << 20));
+  let n = 0, last = -1, ok = true;
+  const r = new P.IncrementalReader(f, (l) => {
+    const o = JSON.parse(l);
+    if (o.i !== last + 1 || o.pad !== 'ñ'.repeat(30)) ok = false;
+    last = o.i; n++;
+  });
+  await r.poll();
+  assert.equal(n, 30_000);
+  assert.ok(ok, 'líneas en orden y sin caracteres rotos');
+});
+
+test('IncrementalReader: dos lecturas a la vez no duplican líneas', async (t) => {
+  const f = path.join(tmpDir(t), 'c.jsonl');
+  fs.writeFileSync(f, '{"a":1}\n');
+  const got = [];
+  const r = new P.IncrementalReader(f, (l) => got.push(l));
+  const [a, b] = await Promise.all([r.poll(), r.poll()]);
+  assert.deepEqual([a, b], [true, false]);
+  assert.deepEqual(got, ['{"a":1}']);
+});
+
+test('readWholeFile entrega la última línea aunque no acabe en salto de línea', async (t) => {
+  const f = path.join(tmpDir(t), 'w.jsonl');
+  fs.writeFileSync(f, '{"a":1}\n{"b":2}');
+  const got = [];
+  await P.readWholeFile(f, (l) => got.push(l));
+  assert.deepEqual(got, ['{"a":1}', '{"b":2}']);
 });
 
 // ── Rutas y sesión activa ───────────────────────────────────────────────────
@@ -197,15 +235,16 @@ test('findActiveSession: plan B encuentra sesiones abiertas en una subcarpeta', 
   writeLines(f, [userLine('z', T0, { cwd: sub })]);
   assert.equal(P.findActiveSession([ws], root), f);
   assert.equal(P.findActiveSession([path.join(root, 'otra')], root), null);
+  assert.equal(P.findActiveSession([ws], root, { fallback: false }), null, 'sin plan B no la encuentra');
 });
 
-test('parseSessionFile incluye los archivos de subagentes', (t) => {
+test('parseSessionFile incluye los archivos de subagentes', async (t) => {
   const root = tmpDir(t);
   const f = path.join(root, 'p', 'sess.jsonl');
   writeLines(f, [userLine('hola', T0), assistantLine('m1', T0 + 1000, { input: 10, output: 5 })]);
   writeLines(path.join(root, 'p', 'sess', 'subagents', 'agent-1.jsonl'),
     [assistantLine('s1', T0 + 2000, { input: 100, output: 20 }, { model: 'claude-haiku-5-5' })]);
-  const s = P.parseSessionFile(f, null, 0, {});
+  const s = await P.parseSessionFile(f, null, 0, {});
   assert.equal(s.apiCalls, 2);
   assert.equal(s.subTotals.output, 20);
   assert.equal(s.currentContext, 10);

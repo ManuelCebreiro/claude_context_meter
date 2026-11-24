@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const path = require('path');
 const B = require('../src/blocks');
 const { tmpDir, assistantLine, writeLines } = require('./helpers');
@@ -55,7 +56,7 @@ test('callFromLine: solo líneas de asistente con usage y timestamp', () => {
   assert.equal(c.usage.input, 3);
 });
 
-test('LiveBlocks: lee todos los proyectos, quita duplicados entre archivos y calcula el ritmo', (t) => {
+test('LiveBlocks: lee todos los proyectos, quita duplicados entre archivos y calcula el ritmo', async (t) => {
   const root = tmpDir(t);
   const now = Date.now();
   writeLines(path.join(root, 'p1', 'a.jsonl'), [
@@ -67,7 +68,7 @@ test('LiveBlocks: lee todos los proyectos, quita duplicados entre archivos y cal
     assistantLine('m2', now - 10 * 60000, { input: 200, output: 100 }),
   ]);
   const lb = new B.LiveBlocks(null, root);
-  assert.equal(lb.poll(now, true), true);
+  assert.equal(await lb.poll(now, true), true);
   const cur = lb.current(now);
   assert.ok(cur);
   assert.equal(cur.calls, 2);
@@ -77,13 +78,54 @@ test('LiveBlocks: lee todos los proyectos, quita duplicados entre archivos y cal
   assert.ok(cur.projectedFresh >= cur.freshTokens);
 });
 
-test('LiveBlocks: sin actividad en las últimas 5 h no hay bloque actual', (t) => {
+test('LiveBlocks: sin actividad en las últimas 5 h no hay bloque actual', async (t) => {
   const root = tmpDir(t);
   const now = Date.now();
   writeLines(path.join(root, 'p', 'a.jsonl'), [assistantLine('m', now - 6 * H, { input: 1 })]);
   const lb = new B.LiveBlocks(null, root);
-  lb.poll(now, true);
+  await lb.poll(now, true);
   assert.equal(lb.current(now), null);
+});
+
+test('LiveBlocks.scanAll es incremental: la segunda vez solo lee lo nuevo', async (t) => {
+  const root = tmpDir(t);
+  const f = path.join(root, 'p', 'a.jsonl');
+  writeLines(f, [assistantLine('n1', T0 + 1 * H, { input: 1 })]);
+  const lb = new B.LiveBlocks(null, root);
+  assert.deepEqual(starts(await lb.scanAll(T0)), [1]);
+  const reader = lb.store.readers.get(f);
+  const offset = reader.offset;
+  fs.appendFileSync(f, assistantLine('n2', T0 + 8 * H, { input: 1 }) + '\n');
+  assert.deepEqual(starts(await lb.scanAll(T0)), [1, 8]);
+  assert.equal(lb.store.readers.get(f), reader, 'reutiliza el mismo lector');
+  assert.ok(reader.offset > offset);
+});
+
+test('LiveBlocks: con ancla, el bloque actual sigue alineado tras 12 h de uso continuo', async (t) => {
+  const root = tmpDir(t);
+  const now = Date.now();
+  const hour = (() => { const d = new Date(now); d.setMinutes(0, 0, 0); return d.getTime(); })();
+  // Llamadas cada 20 min desde hace 12 h: los bloques reales empiezan en hour-12, hour-7 y hour-2
+  const lines = [];
+  for (let m = 12 * 60; m >= 20; m -= 20) lines.push(assistantLine('c' + m, hour - m * 60000 + 60000, { input: 1 }));
+  writeLines(path.join(root, 'p', 'a.jsonl'), lines);
+  const lb = new B.LiveBlocks(null, root);
+  const all = await lb.scanAll(now - 90 * 24 * H);
+  assert.deepEqual(all.map(b => (hour - b.start) / H), [12, 7, 2]);
+  lb.anchor = all[all.length - 1].start;
+  assert.equal(lb.current(now).start, hour - 2 * H);
+});
+
+test('LiveBlocks: el resultado se reutiliza mientras no cambia nada', async (t) => {
+  const root = tmpDir(t);
+  const now = Date.now();
+  writeLines(path.join(root, 'p', 'a.jsonl'), [assistantLine('m', now - 60000, { input: 1 })]);
+  const lb = new B.LiveBlocks(null, root);
+  await lb.poll(now, true);
+  const a = lb.current(now);
+  assert.equal(lb.current(now), a);
+  lb.pricing = { 'opus-5-5': [1, 1, 1, 1, 1] };
+  assert.notEqual(lb.current(now), a, 'al cambiar los precios se recalcula');
 });
 
 test('scanAllBlocks: escanea la carpeta indicada y respeta la fecha mínima', async (t) => {

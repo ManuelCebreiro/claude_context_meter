@@ -4,14 +4,15 @@ Extensión de VS Code (JavaScript puro, sin dependencias ni compilación) que mu
 
 ## Flujo (de principio a fin)
 1. `src/extension.js` → `activate()` crea 3 items de barra de estado y un temporizador (`claudeMeter.pollMs`).
-2. Cada tick:
+2. Cada tick (`tick()` es asíncrono y no se solapa consigo mismo):
    - `P.readClaudeEnv()` lee (solo lectura) `~/.claude/settings.json` y los settings del proyecto para saber si el 1M está desactivado o hay un modelo `[1m]`.
-   - `P.findActiveSession()` busca el transcript más reciente cuyo `cwd` coincide con la carpeta abierta.
-   - `IncrementalReader` lee solo los bytes nuevos → `SessionState.feedLine()` acumula llamadas (deduplicadas por `message.id`) y preguntas.
+   - `P.findActiveSession()` busca el transcript más reciente cuyo `cwd` coincide con la carpeta abierta. Plan A: solo la carpeta de `~/.claude/projects` de la carpeta abierta; plan B (subcarpetas, todos los proyectos) como mucho cada 30 s. El `cwd` de cada archivo se cachea.
+   - `IncrementalReader` (asíncrono, por trozos de 1 MB) lee solo los bytes nuevos → `SessionState.feedLine()` acumula llamadas (deduplicadas por `message.id`) y preguntas.
    - `SessionState.summary()` calcula contexto actual, pico, totales, coste y el desglose por pregunta → `render()` pinta la barra.
-   - `tickBlocks()` → `src/blocks.js` (`LiveBlocks`) suma todas las llamadas de las últimas horas de todos los proyectos y calcula el bloque de 5 h actual.
-3. Panel (`claudeMeter.openPanel`): webview con `media/panel.js` + `media/panel.css`; recibe datos por `postMessage` (`live`, `history`, `blocks`, `detail`).
-4. Histórico: `scanHistory()` guarda un resumen de cada sesión en `globalStorage/history.json`; `scanBlocksBackground()` guarda los bloques de 5 h en `globalStorage/blocks.json`. Así sobreviven aunque Claude Code borre transcripts antiguos.
+   - `pollBlocks()` → `src/blocks.js` (`LiveBlocks`) lee lo nuevo de los transcripts de las últimas 10 h y `showBlocks()` pinta el bloque de 5 h actual (alineado con `anchor`, el inicio del último bloque del escaneo completo).
+3. Panel (`claudeMeter.openPanel`): webview con `media/panel.js` + `media/panel.css`; recibe datos por `postMessage` (`config`, `live`, `history`, `blocks`, `detail`).
+4. Histórico: `scanHistory()` guarda un resumen de cada sesión en `globalStorage/history.json`; `scanBlocksBackground()` (cada hora) guarda los bloques de 5 h en `globalStorage/blocks.json`. Así sobreviven aunque Claude Code borre transcripts antiguos. El escaneo de bloques usa el mismo `CallStore` que `LiveBlocks`: solo lee lo que ha cambiado desde la vez anterior.
+5. Bloque de 5 h: `tokens` (total) y `freshTokens` (sin caché leída). El % de tu máximo, el ritmo y la proyección usan `freshTokens`.
 
 ## Reglas importantes
 - Nunca escribir en `~/.claude/` (ni settings ni hooks). Sin red.
