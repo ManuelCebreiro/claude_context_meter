@@ -242,7 +242,7 @@ async function scanBlocksBackground() {
     const file = path.join(ctxRef.globalStorageUri.fsPath, 'blocks.json');
     let saved = [];
     try {
-      const j = JSON.parse(await fsp.readFile(file, 'utf8'));
+      const j = await readStorageJson('blocks.json');
       saved = Array.isArray(j) ? j : (j && Array.isArray(j.blocks) ? j.blocks : []);
     } catch {}
     const now = Date.now();
@@ -427,6 +427,22 @@ const viewProvider = {
 // ── Histórico (archivo propio, sobrevive a la limpieza de 30 días de Claude) ─
 function historyFile() { return path.join(ctxRef.globalStorageUri.fsPath, 'history.json'); }
 
+// Identificadores anteriores de esta misma extensión (VS Code guarda los datos en una carpeta
+// con el identificador en minúsculas). Si aún no hay datos propios, se leen de ahí: solo
+// lectura, nunca se borran; lo siguiente que se guarde ya va a la carpeta actual.
+const LEGACY_IDS = ['manuelcebreiro.claude-context-meter'];
+async function readStorageJson(name) {
+  const own = path.join(ctxRef.globalStorageUri.fsPath, name);
+  try { return JSON.parse(await fsp.readFile(own, 'utf8')); } catch {}
+  const root = path.dirname(ctxRef.globalStorageUri.fsPath);
+  for (const id of LEGACY_IDS) {
+    const old = path.join(root, id, name);
+    if (old === own) continue;
+    try { return JSON.parse(await fsp.readFile(old, 'utf8')); } catch {}
+  }
+  return null;
+}
+
 // Se lee una sola vez (de forma asíncrona: puede ocupar varios MB) y se queda en memoria
 let historyLoading = null;
 function loadHistory() {
@@ -434,7 +450,7 @@ function loadHistory() {
   if (!historyLoading) {
     historyLoading = (async () => {
       let h = null;
-      try { h = JSON.parse(await fsp.readFile(historyFile(), 'utf8')); } catch {}
+      h = await readStorageJson('history.json');
       if (!h || h.version !== 2) h = { version: 2, sessions: {} };
       history = h;
       return h;

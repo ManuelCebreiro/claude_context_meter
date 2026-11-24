@@ -1,9 +1,9 @@
 {
-  "name": "claude-context-meter",
-  "displayName": "Claude Context Meter",
+  "name": "context-meter-for-claude-code",
+  "displayName": "Context Meter for Claude Code",
   "description": "Unofficial, not affiliated with Anthropic. Context, session tokens, 5-hour and weekly limits and usage history for Claude Code, right below the Claude Code chat. 100% local.",
   "icon": "media/icon.png",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "publisher": "manuelCebreiro",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/ManuelCebreiro/claude_context_meter" },

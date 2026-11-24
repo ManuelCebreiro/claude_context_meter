@@ -1,4 +1,4 @@
-# Claude Context Meter
+# Context Meter for Claude Code
 
 > **Unofficial extension. Not affiliated with, endorsed by or sponsored by Anthropic.** "Claude" and "Claude Code" are trademarks of Anthropic, used here only to describe what the extension works with.
 
@@ -43,7 +43,7 @@ Opened from the view or the status bar.
 1. Download the `.vsix` file from the latest [release](https://github.com/ManuelCebreiro/claude_context_meter/releases).
 2. Install it:
    - In VS Code: Extensions view → `···` menu → **Install from VSIX…** and pick the file.
-   - From a terminal: `code --install-extension claude-context-meter-<version>.vsix`
+   - From a terminal: `code --install-extension context-meter-for-claude-code-<version>.vsix`
 3. Open a folder where you use Claude Code and send Claude a message.
 
 Requires VS Code 1.90 or later. The view is placed below the official Claude Code extension's chat; if that extension is not installed, it appears in the Explorer. If you can't find it, run **Claude Meter: Mostrar la vista** from the Command Palette (`Ctrl+Shift+P`).
