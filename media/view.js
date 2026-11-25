@@ -112,6 +112,7 @@
         ['free', t('free'), t('Space left in the context window.')],
       ]),
       h('div', { class: 'muted small', title: t('How many tokens fit in this model\'s context, and why.') }, t('{0} window: {1}', fmt(s.contextWindow), t(s.contextWindowReason))),
+      advice(s, cfg),
     ]);
   }
 
@@ -326,9 +327,141 @@
     return sec;
   }
 
+  // ── Consejos según el contexto ──
+  // Basados en las buenas prácticas de Claude Code de Anthropic (code.claude.com/docs/en/best-practices y /costs):
+  // con ventanas de 1M rara vez se agota el contexto; lo que pesa es que cada llamada vuelve a pagar todo el historial.
+  const HISTORY_TOKENS = 100000;   // historial a partir del cual conviene /clear al cambiar de tarea
+  const HISTORY_PERCENT = 40;      // o este % de la ventana (ventanas de 200K)
+  const JUMP_TOKENS = 25000;       // una pregunta que añade esto suele venir de logs, tests o archivos grandes
+  const MANY_CALLS = 25;           // pasos de una sola pregunta
+  const BASE_TOKENS = 50000;       // contexto de partida (instrucciones, herramientas, CLAUDE.md, MCP)
+  const IDLE_MIN = 60;             // la caché de prompts dura ~1 h con suscripción (5 min con API key)
+  const IDLE_TOKENS = 100000;
+  function advice(s, cfg) {
+    if (!cfg.contextTips) return null;
+    const pct = pctOf(s.currentContext, s.contextWindow);
+    const f = s.firstCallUsage;
+    const base = f ? f.cacheRead + f.cw5m + f.cw1h + f.input : 0;
+    const history = Math.max(0, s.currentContext - base);
+    const p = s.lastPrompt;
+    const added = p && p.startCtx != null ? p.endCtx - p.startCtx : 0;
+    const idle = s.lastTs ? (Date.now() - Date.parse(s.lastTs)) / 60000 : 0;
+    const items = [];
+    // 1) Cerca del límite: Claude Code compacta solo; mejor elegir qué se conserva
+    if (pct >= cfg.warningPercent) {
+      items.push([pct >= cfg.errorPercent ? 'bad' : 'warn', t('Context at {0}. Claude Code compacts automatically before it fills up. To choose what is kept, run /compact with a focus (for example: /compact keep the API changes and the test commands) or add a "# Compact instructions" section to CLAUDE.md. Compacting reads the whole chat, so if you no longer need it, /clear is cheaper.', pctTxt(pct))]);
+    }
+    // 2) Chat parado con mucho contexto: la caché caduca y el siguiente mensaje reenvía todo sin descuento
+    if (idle >= IDLE_MIN && s.currentContext >= IDLE_TOKENS) {
+      items.push(['info', t('This chat has been idle for {0}. The prompt cache lasts about 1 hour on a subscription (5 minutes with an API key), so your next message will probably send its {1} tokens again at full price. If you do not need this history, start a new chat with /clear.', dur(idle), fmt(s.currentContext))]);
+    }
+    // 3) Mucho historial: /clear entre tareas no relacionadas
+    if (items.length === 0 && (history >= HISTORY_TOKENS || pct >= HISTORY_PERCENT)) {
+      items.push(['info', base > 0
+        ? t('Every call resends {0} tokens of this chat. When you move on to an unrelated task, use /clear: it costs nothing, and the next task stops paying for this history (it would start at about {1}). Use /rename first if you want to come back with /resume.', fmt(s.currentContext), fmt(base))
+        : t('Every call resends {0} tokens of this chat. When you move on to an unrelated task, use /clear: it costs nothing, and the next task stops paying for this history. Use /rename first if you want to come back with /resume.', fmt(s.currentContext))]);
+    }
+    // 4) La última pregunta añadió mucho: salida verbosa → subagente, hook o petición más concreta
+    if (added >= JUMP_TOKENS) {
+      items.push(['info', t('Your last prompt added {0} tokens. Test runs, logs and documentation fill the context: ask Claude to hand them to a subagent (only a summary comes back), filter long output with a hook, and name the file or function you mean so Claude does not scan the whole project.', fmt(added))]);
+    } else if (p && p.calls >= MANY_CALLS) {
+      // 5) Muchos pasos para una pregunta: plan primero, Esc para corregir pronto
+      items.push(['info', t('Your last prompt took {0} calls. For big changes, start in plan mode (Shift+Tab): Claude proposes an approach for you to approve, which avoids costly rework. If it heads the wrong way, press Esc to stop it early, or use /rewind.', p.calls)]);
+    }
+    // 6) Contexto de partida alto (solo al principio del chat, para no insistir)
+    if (s.prompts <= 2 && base >= BASE_TOKENS) {
+      items.push(['info', t('This chat started at {0} tokens before your first message: Claude Code\'s instructions and tools, your CLAUDE.md files and MCP servers. Run /context to see what takes space, keep CLAUDE.md under 200 lines (move occasional instructions to skills) and turn off MCP servers you do not use with /mcp.', fmt(base))]);
+    }
+    if (!items.length) return null;
+    const why = t('Tips based on Anthropic\'s best practices for Claude Code. Every call resends the whole context, so a long chat makes each step more expensive and uses more of your usage limits.');
+    return h('div', { class: 'advice-list' }, items.slice(0, 2).map(([cls, text]) => h('div', { class: 'advice ' + cls, title: why }, text)));
+  }
+
+  // ── Vista simplificada: solo contexto y límites, en pocas líneas ──
+  function simpleContext(s, cfg) {
+    const u = s.lastCallUsage;
+    const pct = pctOf(s.currentContext, s.contextWindow);
+    const cls = level(pct, cfg.warningPercent, cfg.errorPercent);
+    const tip = t('This session carries {0} tokens of context: that is what Claude reads again on every call (instructions, files read and the whole conversation). It fills {1} of the {2} window. When it fills up, Claude Code compacts the conversation (or you can do it with /compact).',
+      num(s.currentContext), pctTxt(pct), fmt(s.contextWindow));
+    return h('section', {}, [
+      h('h4', {}, [t('Context'), h('span', { class: 'right', title: t('Messages you have written in this session (not counting tool results).') },
+        s.prompts === 1 ? t('1 prompt') : t('{0} prompts', s.prompts))]),
+      h('div', { title: tip }, [
+        h('span', { class: 'pct ' + cls }, pctTxt(pct)),
+        h('span', { class: 'big' }, [fmt(s.currentContext), h('span', { class: 'of' }, ' / ' + fmt(s.contextWindow))]),
+      ]),
+      waffle([
+        { value: u.cacheRead, cls: 'c-read' },
+        { value: u.cw5m + u.cw1h, cls: 'c-write' },
+        { value: u.input, cls: 'c-input' },
+      ], s.contextWindow, tip),
+      advice(s, cfg),
+    ]);
+  }
+
+  function limitRow(label, pct, cls, right, tip) {
+    return h('div', { class: 'weekrow', title: tip }, [
+      h('span', { class: 'muted' }, label),
+      h('span', { class: 'bar' }, h('i', { class: 'fill ' + cls, style: 'width:' + Math.min(100, pct) + '%' })),
+      h('span', { class: 'v' }, right),
+    ]);
+  }
+
+  function simpleLimits(st) {
+    const off = st.official, b = st.block, cfg = st.cfg, max = st.max;
+    const lv = (p) => p >= 95 ? 'bad' : p >= cfg.blockWarnRatio * 100 ? 'warn' : '';
+    const kids = [];
+    if (off && off.five) {
+      const mins = (off.five.resetsAt - Date.now()) / 60000;
+      kids.push(limitRow(t('5 h'), off.five.pct, lv(off.five.pct), off.five.pct + '% · ' + dur(mins),
+        t('You have used {0}% of your 5-hour limit. {1} left until it resets (at {2}).', off.five.pct, dur(mins), hm(off.five.resetsAt))));
+    } else if (cfg.showBlock && b) {
+      const ratio = max && max.freshTokens ? b.freshTokens / max.freshTokens * 100 : 0;
+      kids.push(limitRow(t('5 h'), ratio, lv(ratio), fmt(b.freshTokens) + ' · ' + dur(b.minsLeft),
+        t('In this window, Claude Code on this computer is at {0} tokens without cache reads ({1} counting them).', num(b.freshTokens), fmt(b.tokens))
+          + (max ? ' ' + t('It is {0}% of your largest block.', Math.round(ratio)) : '')
+          + ' ' + t('The window ends at {0}.', hm(b.end))));
+    }
+    if (off && off.week) {
+      kids.push(limitRow(t('Weekly'), off.week.pct, lv(off.week.pct), off.week.pct + '%',
+        t('You are at {0}% of your weekly limit. It resets {1}.', off.week.pct, dayTime(off.week.resetsAt))));
+    }
+    if (!kids.length) return null;
+    if (off && off.fetchedAt) kids.push(h('div', { class: 'note muted', title: UPDATE_TIP }, t('Official data from {0}', ago(off.fetchedAt))));
+    return h('section', {}, [h('h4', {}, t('Usage limits')), ...kids]);
+  }
+
+  function modeToggle(simple) {
+    const opt = (mode, label, tip) => h('button', {
+      class: 'seg-btn' + ((mode === 'simple') === simple ? ' on' : ''), title: tip,
+      'aria-pressed': String((mode === 'simple') === simple),
+      onclick: () => vscode.postMessage({ type: 'setViewMode', mode }),
+    }, label);
+    return h('div', { class: 'modes', role: 'group', 'aria-label': t('View mode') }, [
+      opt('simple', t('Simple'), t('Show only the context and your usage limits.')),
+      opt('detailed', t('Detailed'), t('Show every section: last call, session, last prompt and the current window.')),
+    ]);
+  }
+
   function render(st) {
     const kids = [];
     const s = st.live;
+    const simple = st.cfg.viewMode === 'simple';
+    kids.push(modeToggle(simple));
+    if (simple) {
+      if (s) {
+        kids.push(h('div', { class: 'head' }, [
+          h('span', { class: 'proj', title: t('Project of the Claude Code session being measured.') }, tp(s.project)),
+          h('span', { class: 'model muted', title: t('Model of the last response.') }, s.model),
+        ]), simpleContext(s, st.cfg));
+      } else {
+        kids.push(h('div', { class: 'empty' }, t('There is no Claude Code session in this folder yet. It will show up here as soon as you write to Claude.')));
+      }
+      kids.push(simpleLimits(st));
+      app.replaceChildren(...kids.filter(Boolean));
+      return;
+    }
     if (s) {
       kids.push(h('div', { class: 'head' }, [
         h('span', { class: 'proj', title: t('Project of the Claude Code session being measured.') }, tp(s.project)),

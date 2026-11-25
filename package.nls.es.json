@@ -8,7 +8,7 @@
   "config.contextWindow": "Ventana de contexto en tokens. 0 = automática con las reglas de Claude Code (1M por defecto en Opus 4.7+, Sonnet 5+, Haiku 5.5 y Fable; Opus/Sonnet 4.6 solo con [1m]; respeta CLAUDE_CODE_DISABLE_1M_CONTEXT).",
   "config.warningPercent": "% de contexto a partir del cual la barra se pone amarilla.",
   "config.errorPercent": "% de contexto a partir del cual la barra se pone roja.",
-  "config.statusBar": "Qué mostrar en la barra de estado. La vista Claude Meter, debajo del chat de Claude Code, muestra siempre todo.",
+  "config.statusBar": "Qué mostrar en la barra de estado. La vista Claude Meter, debajo del chat de Claude Code, muestra todo en modo Detallado.",
   "config.statusBar.all": "Contexto, sesión y bloque de 5 h",
   "config.statusBar.context": "Solo el contexto",
   "config.statusBar.none": "Nada (todo está en la vista Claude Meter)",
@@ -16,5 +16,9 @@
   "config.blockWarnRatio": "Fracción de tu bloque de 5 h más grande a partir de la cual el indicador se pone amarillo (rojo al superarlo).",
   "config.saveToDisk": "Guardar el histórico de sesiones y de bloques de 5 h (history.json y blocks.json, en el almacenamiento propio de la extensión) para conservarlo cuando Claude Code borre transcripts antiguos. Desactivado, la extensión no escribe nada en disco: solo lee los transcripts y guarda lo nuevo en memoria. Los archivos que ya existan no se borran.",
   "config.pollMs": "Cada cuántos milisegundos se relee el transcript activo.",
-  "config.priceOverrides": "Precios propios por modelo (USD por millón): { \"opus-5-5\": [input, output, cacheWrite5m, cacheWrite1h, cacheRead] }."
+  "config.priceOverrides": "Precios propios por modelo (USD por millón): { \"opus-5-5\": [input, output, cacheWrite5m, cacheWrite1h, cacheRead] }.",
+  "config.viewMode": "Cuánto muestra la vista Claude Meter (debajo del chat de Claude Code). También se cambia con los botones Simple / Detallado de arriba de la vista.",
+  "config.viewMode.simple": "Simple: solo contexto y límites de uso",
+  "config.viewMode.detailed": "Detallado: todas las secciones",
+  "config.contextTips": "Mostrar consejos en la vista Claude Meter cuando crece el contexto (cuándo usar /compact o empezar un chat nuevo)."
 }

@@ -3,7 +3,7 @@
   "displayName": "Context Meter for Claude Code",
   "description": "Unofficial, not affiliated with Anthropic. Context, session tokens, 5-hour and weekly limits and usage history for Claude Code, right below the Claude Code chat. 100% local.",
   "icon": "media/icon.png",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "manuelCebreiro",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/ManuelCebreiro/claude_context_meter" },
@@ -39,6 +39,12 @@
           "enumDescriptions": ["%config.statusBar.all%", "%config.statusBar.context%", "%config.statusBar.none%"],
           "description": "%config.statusBar%"
         },
+        "claudeMeter.viewMode": {
+          "type": "string", "default": "detailed", "enum": ["simple", "detailed"],
+          "enumDescriptions": ["%config.viewMode.simple%", "%config.viewMode.detailed%"],
+          "description": "%config.viewMode%"
+        },
+        "claudeMeter.contextTips": { "type": "boolean", "default": true, "description": "%config.contextTips%" },
         "claudeMeter.showBlock": { "type": "boolean", "default": true, "description": "%config.showBlock%" },
         "claudeMeter.blockWarnRatio": { "type": "number", "default": 0.8, "description": "%config.blockWarnRatio%" },
         "claudeMeter.saveToDisk": { "type": "boolean", "default": true, "description": "%config.saveToDisk%" },

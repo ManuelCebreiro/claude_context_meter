@@ -408,7 +408,7 @@ function updateView() {
     official: officialState(),
     max: max ? { freshTokens: max.freshTokens, start: max.start } : null,
     scanDone: blockScanDone,
-    cfg: { ...panelConfig(), showBlock: cfg().get('showBlock') },
+    cfg: { ...panelConfig(), showBlock: cfg().get('showBlock'), viewMode: cfg().get('viewMode') === 'simple' ? 'simple' : 'detailed', contextTips: cfg().get('contextTips') !== false },
   });
 }
 
@@ -434,6 +434,10 @@ const viewProvider = {
     wv.webview.onDidReceiveMessage((m) => {
       if (m.type === 'ready') updateView();
       else if (m.type === 'openPanel') openPanel();
+      else if (m.type === 'setViewMode' && (m.mode === 'simple' || m.mode === 'detailed')) {
+        // Se guarda como ajuste de usuario: así se recuerda al reiniciar VS Code
+        Promise.resolve(cfg().update('viewMode', m.mode, vscode.ConfigurationTarget.Global)).then(updateView, e => console.error('claudeMeter', e));
+      }
     });
     wv.onDidChangeVisibility(() => updateView());
     wv.onDidDispose(() => { if (view === wv) view = null; });

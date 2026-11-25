@@ -12,9 +12,10 @@ See how much you are using Claude Code without leaving VS Code: the context of t
 
 ### Claude Meter view (below the Claude Code chat)
 
-Sits in the sidebar right below the Claude Code chat. Hover over any value and a tooltip explains what it means.
+Sits in the sidebar right below the Claude Code chat. Hover over any value and a tooltip explains what it means. The **Simple / Detailed** buttons at the top switch between the full view and a compact one with only the context and your usage limits.
 
 - **Context**: how many tokens the conversation carries out of the model's window (1M or 200K), with a grid of squares (1 % of the window each) showing where it comes from: cache, newly cached or uncached.
+- **Context tips**: short tips based on Anthropic's Claude Code best practices, shown when they apply: `/clear` between unrelated tasks once the chat is long, `/compact` with a focus near the limit, a new chat after the prompt cache has expired, subagents or hooks when a prompt added a lot of output, plan mode for long prompts, and `/context` when the chat starts large.
 - **Last call**: cache read, cache write, new input and output.
 - **Session**: prompts, API calls, tokens processed with and without cache reads, subagents and API-equivalent cost, plus a bar showing how much of it is cache reads.
 - **Last prompt**: how much context it added and what it cost.
@@ -53,6 +54,8 @@ Requires VS Code 1.90 or later. The view is placed below the official Claude Cod
 | Setting | Default | What it does |
 |---|---|---|
 | `claudeMeter.statusBar` | `all` | What to show in the status bar: `all`, `context` or `none`. |
+| `claudeMeter.viewMode` | `detailed` | How much the view shows: `simple` (context and limits) or `detailed`. Also switchable from the view. |
+| `claudeMeter.contextTips` | `true` | Show context tips in the view. |
 | `claudeMeter.showCost` | `true` | Show the API-equivalent cost. |
 | `claudeMeter.warningPercent` / `errorPercent` | `60` / `80` | Context % at which it turns yellow / red. |
 | `claudeMeter.showBlock` | `true` | Show the 5-hour limit and the current window. |
@@ -91,7 +94,7 @@ Requires VS Code 1.90 or later. The view is placed below the official Claude Cod
 
 Muestra tu consumo de Claude Code dentro de VS Code: el contexto de la conversación, lo que lleva cada chat, tus límites de 5 horas y semanal, y un histórico de tus sesiones. Funciona en local: no usa la red ni modifica nada de Claude Code.
 
-- **Vista "Claude Meter"**, debajo del chat de Claude Code: contexto (con cuadraditos), última llamada, sesión, última pregunta, límites oficiales de 5 h y semanal, y la ventana actual de este proyecto y de todos tus proyectos. Al pasar el ratón por cada dato se explica qué es.
+- **Vista "Claude Meter"**, debajo del chat de Claude Code: contexto (con cuadraditos), última llamada, sesión, última pregunta, límites oficiales de 5 h y semanal, y la ventana actual de este proyecto y de todos tus proyectos. Al pasar el ratón por cada dato se explica qué es. Con los botones **Simple / Detallado** eliges entre la vista completa y una mínima con solo el contexto y los límites, e incluye **consejos** basados en las buenas prácticas de Claude Code de Anthropic (cuándo usar `/clear`, `/compact`, subagentes, modo plan…).
 - **Barra de estado** con tres indicadores cortos (ajuste `claudeMeter.statusBar`).
 - **Panel completo** con la sesión pregunta a pregunta y el histórico.
 

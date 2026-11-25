@@ -35,6 +35,20 @@ button { margin-top: 10px; width: 100%; background: var(--vscode-button-secondar
 button:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground)); }
 button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
 
+/* Consejos según el contexto */
+.advice-list { display: grid; gap: 4px; margin-top: 6px; }
+.advice { padding: 4px 8px; border-left: 2px solid var(--vscode-charts-blue, #3794ff); border-radius: 2px; font-size: 11px;
+  background: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 8%, transparent); }
+.advice.warn { border-left-color: var(--vscode-charts-yellow, #cca700); background: color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 10%, transparent); }
+.advice.bad { border-left-color: var(--vscode-charts-red, #f14c4c); background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 10%, transparent); }
+
+/* Selector Simple / Detallado */
+.modes { display: flex; justify-content: flex-end; gap: 2px; padding-top: 4px; }
+.modes .seg-btn { margin: 0; width: auto; padding: 1px 8px; font-size: 11px; background: transparent; color: var(--vscode-descriptionForeground); border-radius: 3px; }
+.modes .seg-btn:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.15)); color: var(--vscode-foreground); }
+.modes .seg-btn.on { background: var(--vscode-button-secondaryBackground, rgba(128,128,128,.25)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }
+.modes + .head { padding-top: 0; }
+
 /* Explicaciones al pasar el ratón */
 [data-tip] { cursor: help; }
 button[data-tip] { cursor: pointer; }
